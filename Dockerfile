@@ -1,5 +1,7 @@
 FROM python:3.12-slim-bookworm
 
+LABEL org.opencontainers.image.source="https://github.com/EternisAI/agent-sandbox"
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
