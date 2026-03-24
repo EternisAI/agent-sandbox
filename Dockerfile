@@ -6,13 +6,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
     curl \
     git \
+    jq \
     sudo \
-    build-essential \
     ca-certificates \
     gnupg \
     unzip \
-    && ln -sf /bin/bash /usr/bin/bash \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && [ -f /usr/bin/bash ] || ln -s /bin/bash /usr/bin/bash
 
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
