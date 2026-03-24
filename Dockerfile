@@ -3,6 +3,7 @@ FROM python:3.12-slim-bookworm
 LABEL org.opencontainers.image.source="https://github.com/EternisAI/agent-sandbox"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash \
     curl \
     git \
     sudo \
@@ -10,17 +11,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     gnupg \
     unzip \
+    && ln -sf /bin/bash /usr/bin/bash \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@10.6.5 --activate
 
-RUN pip install --no-cache-dir uv
+RUN pip install --no-cache-dir uv==0.6.12
 
-RUN npm install -g opencode-ai
+RUN npm install -g opencode-ai@1.3.0
 
 ARG TARGETARCH
 RUN POLY_VERSION="v0.1.5" && \
