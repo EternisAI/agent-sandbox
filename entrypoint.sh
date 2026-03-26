@@ -4,7 +4,8 @@ set -e
 : "${OPENROUTER_BASE_URL:?OPENROUTER_BASE_URL is required}"
 : "${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is required}"
 
-mkdir -p /home/sandbox/.config/opencode /data/workspaces
+export OPENCODE_DB=/data/opencode/opencode.db
+
 cat > /home/sandbox/.config/opencode/opencode.json <<EOF
 {
   "provider": {

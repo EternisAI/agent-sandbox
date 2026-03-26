@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && [ -f /usr/bin/bash ] || ln -s /bin/bash /usr/bin/bash
 
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
@@ -22,7 +22,7 @@ RUN corepack enable && corepack prepare pnpm@10.6.5 --activate
 
 RUN pip install --no-cache-dir uv==0.6.12
 
-RUN npm install -g opencode-ai@1.3.0
+RUN npm install -g opencode-ai@1.3.2
 
 ARG TARGETARCH
 RUN POLY_VERSION="v0.1.5" && \
@@ -36,8 +36,8 @@ RUN POLY_VERSION="v0.1.5" && \
 RUN useradd -m -s /bin/bash sandbox \
     && echo "sandbox ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
-RUN mkdir -p /sandbox/.agents /sandbox/workspaces /data \
-    && chown -R sandbox:sandbox /sandbox /data
+RUN mkdir -p /sandbox/.agents /sandbox/workspaces /data/opencode /data/workspaces /home/sandbox/.config/opencode \
+    && chown -R sandbox:sandbox /sandbox /data /home/sandbox/.config/opencode
 
 USER sandbox
 WORKDIR /sandbox
