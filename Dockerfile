@@ -20,7 +20,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
 
 RUN corepack enable && corepack prepare pnpm@10.6.5 --activate
 
-RUN pip install --no-cache-dir uv==0.6.12
+RUN pip install --no-cache-dir uv==0.6.12 massive==2.4.0
 
 RUN npm install -g opencode-ai@1.3.2
 
@@ -48,7 +48,7 @@ RUN git config --global user.email "agent@axion.ai" \
 
 COPY --chown=sandbox:sandbox skills/ /sandbox/.agents/skills/
 COPY --chown=sandbox:sandbox entrypoint.sh /sandbox/entrypoint.sh
-RUN chmod +x /sandbox/entrypoint.sh && find /sandbox/.agents/skills -name "*.sh" -exec chmod +x {} +
+RUN chmod +x /sandbox/entrypoint.sh && find /sandbox/.agents/skills -name "*.sh" -o -name "*.py" | xargs chmod +x
 
 EXPOSE 4096
 
