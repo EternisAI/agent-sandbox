@@ -46,9 +46,9 @@ RUN git config --global user.email "agent@axion.ai" \
     && git config --global user.name "Axion Agent" \
     && git init /sandbox/workspaces
 
-COPY --chown=sandbox:sandbox skills/ /sandbox/.agents/skills/
+COPY --chown=sandbox:sandbox skills/ /home/sandbox/.agents/skills/
 COPY --chown=sandbox:sandbox entrypoint.sh /sandbox/entrypoint.sh
-RUN chmod +x /sandbox/entrypoint.sh && find /sandbox/.agents/skills -name "*.sh" -o -name "*.py" | xargs chmod +x
+RUN chmod +x /sandbox/entrypoint.sh && find /home/sandbox/.agents/skills -name "*.sh" -o -name "*.py" | xargs chmod +x
 
 EXPOSE 4096
 
