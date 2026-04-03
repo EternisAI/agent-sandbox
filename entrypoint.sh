@@ -11,7 +11,7 @@ cat > /home/sandbox/.config/opencode/opencode.json <<EOF
 {
   "provider": {
     "openrouter": {
-      "npm": "@ai-sdk/openai-compatible",
+      "npm": "@ai-sdk/openai",
       "name": "OpenRouter",
       "options": {
         "baseURL": "$OPENROUTER_BASE_URL",
