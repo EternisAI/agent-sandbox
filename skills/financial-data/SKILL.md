@@ -1,5 +1,5 @@
 ---
-name: massive-sdk
+name: financial-data
 description: Fetch financial market data (stocks, options, crypto, forex, economy, fundamentals) using the Massive Python SDK. Use when agents need stock prices, aggregates, snapshots, financials, indicators, or any market data. Supports all Massive.com/Polygon.io endpoints.
 allowed-tools: Bash(python3 ${CLAUDE_SKILL_DIR}/scripts/discover.py *), Bash(python3 -c *), Bash(python3 - *), Bash(python3 *)
 ---
