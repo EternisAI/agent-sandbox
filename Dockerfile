@@ -24,14 +24,6 @@ RUN pip install --no-cache-dir uv==0.6.12 massive==2.4.0 pymupdf4llm==1.27.2.2
 
 RUN npm install -g opencode-ai@1.3.2
 
-ARG TARGETARCH
-RUN POLY_VERSION="v0.1.5" && \
-    case "${TARGETARCH}" in \
-      arm64) POLY_ARCH="aarch64" ;; \
-      *)     POLY_ARCH="x86_64" ;; \
-    esac && \
-    curl -fsSL "https://github.com/Polymarket/polymarket-cli/releases/download/${POLY_VERSION}/polymarket-${POLY_VERSION}-${POLY_ARCH}-unknown-linux-gnu.tar.gz" \
-      | tar -xz -C /usr/local/bin polymarket
 
 RUN useradd -m -s /bin/bash sandbox \
     && echo "sandbox ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
