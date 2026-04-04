@@ -84,10 +84,15 @@ All field values are **floats** unless noted. Timestamps are **int** (Unix epoch
 
 - `get_snapshot_ticker(market_type, ticker)` -> TickerSnapshot -- **WARNING:** `last_trade` and `last_quote` will be `None` and `day` fields zeroed when market is closed. Always null-check before accessing nested fields.
 - `get_snapshot_all(market_type)` -> List[TickerSnapshot]
+- `get_snapshot_option(underlying_asset, option_contract)` -> OptionContractSnapshot -- single option contract snapshot
+- `get_snapshot_direction(market_type, direction)` -> List[TickerSnapshot] -- `direction` is `"gainers"` or `"losers"`
+- `get_snapshot_indices()` -> List[IndicesSnapshot] -- filter with `ticker_any_of=`
 - `list_universal_snapshots()` -> Iterator[UniversalSnapshot]
 - `list_snapshot_options_chain(underlying_asset)` -> Iterator[OptionContractSnapshot]
 
 **TickerSnapshot fields:** `ticker` (str), `day` (Agg), `prev_day` (Agg), `last_trade` (LastTrade or None), `last_quote` (LastQuote or None), `min` (MinuteSnapshot), `todays_change`, `todays_change_percent`, `updated` (int), `fair_market_value`
+
+**IndicesSnapshot fields:** `ticker` (str), `value`, `name` (str), `type` (str), `market_status` (str), `session` (IndicesSession)
 
 ### Economy
 
@@ -104,10 +109,13 @@ All economy methods accept date filters: `date=`, `date_gt=`, `date_gte=`, `date
 
 ### Financials (requires higher-tier plan)
 
-- `list_financials_income_statements()` -> Iterator[FinancialIncomeStatement]
-- `list_financials_balance_sheets()` -> Iterator[FinancialBalanceSheet]
-- `list_financials_cash_flow_statements()` -> Iterator[FinancialCashFlowStatement]
-- `list_financials_ratios()` -> Iterator[FinancialRatio]
+- `list_financials_income_statements()` -> Iterator[FinancialIncomeStatement] -- **NOT_AUTHORIZED on current plan**
+- `list_financials_balance_sheets()` -> Iterator[FinancialBalanceSheet] -- **NOT_AUTHORIZED on current plan**
+- `list_financials_cash_flow_statements()` -> Iterator[FinancialCashFlowStatement] -- **NOT_AUTHORIZED on current plan**
+- `list_financials_ratios()` -> Iterator[FinancialRatio] -- **NOT_AUTHORIZED on current plan**
+- `list_stocks_floats()` -> Iterator[FinancialFloat] -- filter with `ticker=`, `limit=`
+
+**FinancialFloat fields:** `ticker` (str), `effective_date` (str), `free_float` (int), `free_float_percent` (float)
 
 ### Reference
 
@@ -115,10 +123,28 @@ All economy methods accept date filters: `date=`, `date_gt=`, `date_gte=`, `date
 - `list_tickers()` -> Iterator[Ticker]
 - `list_ticker_news()` -> Iterator[TickerNews]
 - `get_related_companies()` -> RelatedCompany
+- `get_ticker_events(ticker)` -> TickerChangeResults -- corporate events (name changes, mergers, etc.)
+- `get_ticker_types()` -> List[TickerTypes] -- filter with `asset_class=`, `locale=`
 - `list_dividends()` -> Iterator[Dividend]
 - `list_splits()` -> Iterator[Split]
 - `list_short_volume()` -> List[ShortVolume]
 - `list_short_interest()` -> List[ShortInterest]
+- `list_stocks_dividends()` -> Iterator[StockDividend] -- filter with `ticker=`, `ex_dividend_date=`, `limit=`
+- `list_stocks_splits()` -> Iterator[StockSplit] -- filter with `ticker=`, `execution_date=`, `limit=`
+- `get_exchanges()` -> List[Exchange] -- filter with `asset_class=`, `locale=`
+- `list_conditions()` -> Iterator[Condition] -- filter with `asset_class=`, `data_type=`, `limit=`
+
+**TickerChangeResults fields:** `name` (str), `composite_figi` (str), `cik` (str), `events` (list of TickerChangeEvent)
+
+**TickerTypes fields:** `asset_class` (str), `code` (str), `description` (str), `locale` (str)
+
+**StockDividend fields:** `ticker` (str), `cash_amount`, `currency` (str), `declaration_date` (str), `ex_dividend_date` (str), `pay_date` (str), `record_date` (str), `frequency` (int), `distribution_type` (str)
+
+**StockSplit fields:** `ticker` (str), `execution_date` (str), `split_from`, `split_to`, `adjustment_type` (str)
+
+**Exchange fields:** `id` (int), `name` (str), `acronym` (str), `mic` (str), `asset_class` (str), `locale` (str), `type` (str)
+
+**Condition fields:** `id` (int), `name` (str), `description` (str), `asset_class` (str), `type` (str), `data_types` (list of str)
 
 ### Options
 
@@ -135,12 +161,28 @@ All economy methods accept date filters: `date=`, `date_gt=`, `date_gte=`, `date
 - `last_trade`: last trade data (may be None when market closed)
 - `underlying_asset`: underlying ticker info
 
+### SEC Filings (detailed)
+
+- `list_stocks_filings_index()` -> Iterator[FilingIndex] -- SEC filings index
+- `list_stocks_filings_10k_sections()` -> Iterator[FilingSection] -- 10-K section text, filter with `ticker=`, `limit=`
+- `list_stocks_filings_8k_text()` -> Iterator[Filing8K] -- 8-K filing text, filter with `ticker=`, `limit=`
+- `list_stocks_filings_risk_factors()` -> Iterator[RiskFactor] -- extracted risk factors, filter with `ticker=`, `filing_date=`, `limit=`
+- `list_stocks_taxonomies_risk_factors()` -> Iterator[RiskFactorTaxonomy] -- risk factor taxonomy/categories
+
+**FilingSection fields:** `ticker` (str), `cik` (str), `filing_date` (str), `filing_url` (str), `period_end` (str), `section` (str), `text` (str)
+
+**Filing8K fields:** `ticker` (str), `cik` (str), `filing_date` (str), `filing_url` (str), `form_type` (str), `items_text` (str), `accession_number` (str)
+
+**RiskFactor fields:** `ticker` (str), `cik` (str), `filing_date` (str), `primary_category` (str), `secondary_category` (str), `tertiary_category` (str), `supporting_text` (str)
+
+**RiskFactorTaxonomy fields:** `taxonomy`, `primary_category` (str), `secondary_category` (str), `tertiary_category` (str), `description` (str)
+
 ### Trades & Quotes (requires higher-tier plan)
 
-- `get_last_trade(ticker)` -> LastTrade -- **NOT_AUTHORIZED on basic plan**
-- `list_trades(ticker)` -> Iterator[Trade] -- **NOT_AUTHORIZED on basic plan**
-- `get_last_quote(ticker)` -> LastQuote -- **NOT_AUTHORIZED on basic plan**
-- `list_quotes(ticker)` -> Iterator[Quote] -- **NOT_AUTHORIZED on basic plan**
+- `get_last_trade(ticker)` -> LastTrade -- **NOT_AUTHORIZED on current plan**
+- `list_trades(ticker)` -> Iterator[Trade] -- **NOT_AUTHORIZED on current plan**
+- `get_last_quote(ticker)` -> LastQuote -- **NOT_AUTHORIZED on current plan**
+- `list_quotes(ticker)` -> Iterator[Quote] -- **NOT_AUTHORIZED on current plan**
 
 ### Forex & Crypto
 
@@ -153,7 +195,20 @@ All economy methods accept date filters: `date=`, `date_gt=`, `date_gte=`, `date
 
 - `get_market_status()` -> MarketStatus -- `market` (str: "open"/"closed"), `server_time` (str), `exchanges` (nested)
 - `get_market_holidays()` -> List[MarketHoliday]
-- `list_stocks_filings_index()` -> Iterator[FilingIndex] -- SEC filings
+
+### Blocked categories (NOT_AUTHORIZED on current plan)
+
+The following SDK method groups exist in `massive==2.4.0` but are entirely blocked on the current plan. Do not call these -- they will all throw `BadResponse` with `NOT_AUTHORIZED`.
+
+- **Benzinga (10 methods):** `list_benzinga_analyst_insights`, `list_benzinga_analysts`, `list_benzinga_bulls_bears_say`, `list_benzinga_consensus_ratings`, `list_benzinga_earnings`, `list_benzinga_firms`, `list_benzinga_guidance`, `list_benzinga_news`, `list_benzinga_news_v2`, `list_benzinga_ratings`
+- **ETF Global (5 methods):** `get_etf_global_analytics`, `get_etf_global_constituents`, `get_etf_global_fund_flows`, `get_etf_global_profiles`, `get_etf_global_taxonomies` -- use `composite_ticker=` param (not `ticker=`)
+- **Futures (9 methods):** `get_futures_snapshot`, `list_futures_aggregates`, `list_futures_contracts`, `list_futures_exchanges`, `list_futures_market_statuses`, `list_futures_products`, `list_futures_quotes`, `list_futures_schedules`, `list_futures_trades`
+- **Summaries (1 method):** `get_summaries`
+- **TMX (1 method):** `list_tmx_corporate_events`
+
+### Deprecated / broken
+
+- `get_snapshot_crypto_book(ticker)` -- returns 404, likely deprecated. Use `get_aggs("X:BTCUSD", ...)` for crypto data instead.
 
 ## Examples by Category
 
@@ -303,13 +358,15 @@ news = list(client.list_ticker_news(ticker="AAPL", limit=10))
 1. **`get_previous_close_agg` returns a list**, not a single object. Access `[0]` for the result.
 2. **`get_aggs` returns bars in chronological order** (oldest first). The last element is the most recent bar.
 3. **`get_snapshot_ticker` fields can be `None`/zeroed when market is closed.** `last_trade` and `last_quote` will be `None`, `day` OHLCV will be all zeros. Always null-check: `if snap.last_trade is not None:`.
-4. **`get_last_trade`, `get_last_quote`, `list_trades`, `list_quotes` require a higher-tier plan.** They throw `BadResponse` with `NOT_AUTHORIZED` on the basic plan. Use `get_previous_close_agg` + `get_aggs` instead.
-5. **Financials endpoints also require higher-tier plans** -- same `NOT_AUTHORIZED` error.
+4. **`get_last_trade`, `get_last_quote`, `list_trades`, `list_quotes` require a higher-tier plan.** They throw `BadResponse` with `NOT_AUTHORIZED`. Use `get_previous_close_agg` + `get_aggs` instead.
+5. **Financials endpoints (`list_financials_*`) require higher-tier plans** -- same `NOT_AUTHORIZED` error. `list_stocks_floats` works on the current plan.
 6. **Indicator methods return wrapper objects, NOT iterables.** Access `.values` to get the list.
-7. **Parameter names use `tickers` (plural)** for financials methods, not `ticker`.
+7. **Parameter names use `tickers` (plural)** for financials methods, not `ticker`. ETF Global methods use `composite_ticker=`, not `ticker=`.
 8. **Rate limits:** add `time.sleep(0.5)` between rapid-fire calls, or use `limit=` to reduce pagination.
 9. **`get_grouped_daily_aggs` returns empty for non-trading days** (weekends/holidays) -- no error.
 10. **Crypto tickers** use `X:` prefix (e.g., `X:BTCUSD`), **forex** uses `C:` prefix (e.g., `C:EURUSD`).
 11. **All timestamps are Unix epoch milliseconds (int).** Convert with `datetime.fromtimestamp(ts / 1000)`.
 12. **Economy data frequencies differ:** treasury yields are daily, inflation is monthly. Align dates when combining.
 13. **Options `contract_type` values are lowercase strings:** `"call"` or `"put"`.
+14. **Benzinga, ETF Global, Futures, Summaries, and TMX are all blocked** on the current plan. See "Blocked categories" section above.
+15. **`get_snapshot_crypto_book` is deprecated** (returns 404). Use crypto aggregates instead.
