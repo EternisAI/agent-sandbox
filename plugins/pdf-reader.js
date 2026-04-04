@@ -30,11 +30,14 @@ export const PdfReader = async () => {
         writeFileSync(tmpPdf, Buffer.from(match[1], "base64"));
 
         const script = join(__dirname, "extract_pdf.py");
-        const md = execSync(`python3 "${script}" "${tmpPdf}"`, {
+        const raw = execSync(`python3 "${script}" "${tmpPdf}"`, {
           encoding: "utf-8",
           timeout: 60000,
-          maxBuffer: 10 * 1024 * 1024,
+          maxBuffer: 50 * 1024 * 1024,
         });
+
+        const result = JSON.parse(raw);
+        const md = result.markdown || "";
 
         if (md.trim().length === 0) {
           output.output =
@@ -44,7 +47,14 @@ export const PdfReader = async () => {
         }
 
         output.output = `<path>${filePath}</path>\n<type>file</type>\n<content>${md}</content>`;
-        output.attachments = [];
+
+        // Keep original PDF attachment metadata as template for image attachments
+        const template = pdfAttachment;
+        output.attachments = (result.images || []).map((b64) => ({
+          ...template,
+          mime: "image/png",
+          url: `data:image/png;base64,${b64}`,
+        }));
       } catch (e) {
         output.output = `PDF text extraction failed: ${e.message}. The file exists at ${filePath}.`;
         output.attachments = [];
