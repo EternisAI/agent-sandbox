@@ -74,7 +74,7 @@ export const PdfReader = async () => {
         const images = (result.images || []).slice(0, MAX_IMAGES);
         output.attachments = images.map((b64) => ({
           ...pdfAttachment,
-          id: randomUUID(),
+          id: `prt_${randomUUID().replace(/-/g, "")}`,
           mime: "image/png",
           url: `data:image/png;base64,${b64}`,
         }));
