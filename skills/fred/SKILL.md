@@ -93,5 +93,6 @@ updates = get_fred_series_updates()
 
 - Use `GET` only.
 - Keep `fred.root_url` overridden to the proxy base from `OPENROUTER_BASE_URL`.
+- For direct endpoint calls, include `file_type=json` in query params; if omitted, FRED defaults to XML responses.
 - Keep results concise: process data in Python and print summarized outputs.
 - Use `limit=` for list endpoints to avoid large responses.
