@@ -1,60 +1,12 @@
 ---
 name: financial-data
-description: Fetch financial data using Python SDKs. Use Massive for market data (stocks, options, crypto, forex, fundamentals) and the macroeconomics API for CPI, unemployment, GDP, rates, and release calendars.
+description: Fetch financial market data (stocks, options, crypto, forex, economy, fundamentals) using the Massive Python SDK. Use when agents need stock prices, aggregates, snapshots, financials, indicators, or any market data. Supports all Massive.com/Polygon.io endpoints.
 allowed-tools: Bash(python3 ${CLAUDE_SKILL_DIR}/scripts/discover.py *), Bash(python3 -c *), Bash(python3 - *), Bash(python3 *)
 ---
 
-# Financial Data Python SDKs
+# Massive Python SDK (Financial Market Data)
 
 The `massive` Python package provides typed access to the full Massive.com (formerly Polygon.io) REST API. The API key is proxied through the backend -- never use a raw API key.
-
-For macroeconomic series, use the macroeconomics proxy API through the same LLM proxy ingress. Override the SDK/client base URL using `OPENROUTER_BASE_URL`.
-
-```python
-import os
-import json
-import urllib.parse
-import urllib.request
-
-macro_base = os.environ["OPENROUTER_BASE_URL"].rstrip("/") + "/fred"
-token = os.environ["OPENROUTER_API_KEY"]
-
-def macro_get(path: str, params: dict) -> dict:
-    url = f"{macro_base}/{path.lstrip('/')}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(
-        url,
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        return json.loads(resp.read().decode())
-
-# Macro series observations
-observations = macro_get("series/observations", {"series_id": "CPIAUCSL", "limit": 12})["observations"]
-
-# Macro metadata + discovery helpers
-series_search = macro_get("series/search", {"search_text": "unemployment", "limit": 10})["seriess"]
-series_info = macro_get("series", {"series_id": "UNRATE"})["seriess"]
-releases = macro_get("releases", {})["releases"]
-release_dates = macro_get("release/dates", {"release_id": 10})["release_dates"]
-updates = macro_get("series/updates", {"filter_value": "macro", "limit": 100})["seriess"]
-```
-
-Recommended macro helper mapping (function-style):
-
-- `search_macro_series(query, limit)` -> `series/search`
-- `get_macro_series(series_id, observation_start, units)` -> `series/observations`
-- `get_macro_series_info(series_id)` -> `series`
-- `get_macro_releases()` -> `releases`
-- `get_macro_release_dates(release_id)` -> `release/dates`
-- `get_macro_series_updates(filter_value, limit)` -> `series/updates`
-
-```python
-# Equivalent direct call shape used by the helper above
-url = f"{macro_base}/series/observations?" + urllib.parse.urlencode({"series_id": "CPIAUCSL", "limit": 12})
-req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
-with urllib.request.urlopen(req, timeout=20) as resp:
-    observations = json.loads(resp.read().decode())["observations"]
-```
 
 ## Sandbox Environment
 
