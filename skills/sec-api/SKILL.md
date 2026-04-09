@@ -53,7 +53,7 @@ mapping_api = bind_proxy(MappingApi(api_key), "mapping")
 | --- | --- | --- | --- | --- | --- |
 | 8-K | Material event between scheduled filings | Event-driven | HF, VC | Query API + Section Extractor (35 item types) | Supported |
 | Form 4 | Insider buy/sell by officers/directors | Within 2 days | HF | Insider Trading API (`/insider-trading`) | Supported |
-| 13D | Activist investor crosses 5% with intent | Within 5 business days | HF, VC | Form 13D/13G API (`/form-13d-13g`) | Business plan only |
+| 13D | Activist investor crosses 5% with intent | Within 5 business days | HF, VC | Query API to retrieve these filings and extract content via Section Extractor or agent parsing | Business plan only |
 | 10-Q | Quarterly financials, MD&A, risk updates | 3x per year | HF, VC | Query API + Section Extractor + XBRL-to-JSON | Supported |
 | 13F | Institutional holdings ($100M+ AUM) | Quarterly | HF, VC | Form 13F API (`/form-13f`) | Supported |
 | 10-K | Annual financials, risks, business overview | Yearly | HF, VC | Query API + Section Extractor + XBRL-to-JSON | Supported |
@@ -144,7 +144,8 @@ Use for filing content keyword queries across all forms.
 
 - Use full strings: `SC 13D`, `SC 13G`, `SC 13D/A`, `SC 13G/A`.
 - `cusip` is target company, `cik` is filer.
-- 13D retrieval is business-plan gated.
+- 13D is business-plan only; do not rely on the dedicated 13D endpoint in this environment.
+- For 13D in this environment, use Query API retrieval and extract details via Section Extractor or agent parsing.
 
 ### Form S-1/424B4 (`/form-s1-424b4`)
 
