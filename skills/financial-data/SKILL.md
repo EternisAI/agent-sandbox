@@ -12,20 +12,21 @@ For macroeconomic series, use the macroeconomics proxy API through the same LLM 
 
 ```python
 import os
-import httpx
+import json
+import urllib.parse
+import urllib.request
 
 macro_base = os.environ["OPENROUTER_BASE_URL"].rstrip("/") + "/fred"
 token = os.environ["OPENROUTER_API_KEY"]
 
 def macro_get(path: str, params: dict) -> dict:
-    resp = httpx.get(
-        f"{macro_base}/{path.lstrip('/')}",
+    url = f"{macro_base}/{path.lstrip('/')}?{urllib.parse.urlencode(params)}"
+    req = urllib.request.Request(
+        url,
         headers={"Authorization": f"Bearer {token}"},
-        params=params,
-        timeout=20.0,
     )
-    resp.raise_for_status()
-    return resp.json()
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return json.loads(resp.read().decode())
 
 # Macro series observations
 observations = macro_get("series/observations", {"series_id": "CPIAUCSL", "limit": 12})["observations"]
@@ -49,14 +50,10 @@ Recommended macro helper mapping (function-style):
 
 ```python
 # Equivalent direct call shape used by the helper above
-resp = httpx.get(
-    f"{macro_base}/series/observations",
-    headers={"Authorization": f"Bearer {token}"},
-    params={"series_id": "CPIAUCSL", "limit": 12},
-    timeout=20.0,
-)
-resp.raise_for_status()
-observations = resp.json()["observations"]
+url = f"{macro_base}/series/observations?" + urllib.parse.urlencode({"series_id": "CPIAUCSL", "limit": 12})
+req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+with urllib.request.urlopen(req, timeout=20) as resp:
+    observations = json.loads(resp.read().decode())["observations"]
 ```
 
 ## Sandbox Environment
