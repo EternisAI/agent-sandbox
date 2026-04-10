@@ -17,6 +17,7 @@ cat > /home/sandbox/.config/opencode/opencode.json <<EOF
       "options": {
         "baseURL": "$OPENROUTER_BASE_URL",
         "apiKey": "$OPENROUTER_API_KEY",
+        "timeout": 180000,
         "chunkTimeout": 60000
       }
     }
