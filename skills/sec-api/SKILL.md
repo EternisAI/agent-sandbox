@@ -10,9 +10,10 @@ Use the `sec-api` Python package through the backend SEC proxy. Do not use direc
 
 ## Authentication and Proxy Base Override
 
+The SDK sends `Authorization: <api_key>` as a header on every request; the proxy validates the JWT from that header. Do NOT put the token in the `api_endpoint` URL — the SDK appends path segments (e.g. `/ticker/GOOGL`) to `api_endpoint` via string concatenation, which would corrupt any query string already in it.
+
 ```python
 import os
-from urllib.parse import quote
 from sec_api import QueryApi, FullTextSearchApi, ExtractorApi, XbrlApi
 from sec_api import InsiderTradingApi, Form13FHoldingsApi, Form13FCoverPagesApi
 from sec_api import Form13DGApi, FormDApi, Form_S1_424B4_Api
@@ -23,11 +24,7 @@ proxy_base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/s
 api_key = os.environ["OPENROUTER_API_KEY"]
 
 def bind_proxy(client, endpoint_path: str):
-    token = quote(api_key)
-    if endpoint_path:
-        client.api_endpoint = f"{proxy_base}/{endpoint_path.lstrip('/')}?token={token}"
-    else:
-        client.api_endpoint = f"{proxy_base}?token={token}"
+    client.api_endpoint = f"{proxy_base}/{endpoint_path.lstrip('/')}" if endpoint_path else proxy_base
     return client
 
 query_api = bind_proxy(QueryApi(api_key), "")
@@ -166,18 +163,13 @@ One endpoint for both registration and final prospectus retrieval.
 
 ```python
 import os
-from urllib.parse import quote
 from sec_api import MappingApi, QueryApi, ExtractorApi, XbrlApi
 
 proxy_base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/sec-proxy").rstrip("/")
 api_key = os.environ["OPENROUTER_API_KEY"]
 
 def bind_proxy(client, endpoint_path: str):
-    token = quote(api_key)
-    if endpoint_path:
-        client.api_endpoint = f"{proxy_base}/{endpoint_path}?token={token}"
-    else:
-        client.api_endpoint = f"{proxy_base}?token={token}"
+    client.api_endpoint = f"{proxy_base}/{endpoint_path.lstrip('/')}" if endpoint_path else proxy_base
     return client
 
 mapping = bind_proxy(MappingApi(api_key), "mapping")
