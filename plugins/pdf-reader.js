@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { statSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { statSync, existsSync, mkdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -7,7 +7,6 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CACHE_DIR = join(tmpdir(), "opencode-pdf-cache");
-const MAX_PDF_FILE_SIZE = 20 * 1024 * 1024; // 20MB
 
 function cacheKey(filePath, stat) {
   return createHash("sha256")
