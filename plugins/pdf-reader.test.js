@@ -51,7 +51,6 @@ describe("PdfReader plugin", async () => {
   });
 
   it("throws with instructions on extraction failure", async () => {
-    // Create a file that exists but is not a valid PDF
     const { writeFileSync } = await import("node:fs");
     const badPdf = "/tmp/bad-test.pdf";
     writeFileSync(badPdf, "not a real pdf");
@@ -64,5 +63,14 @@ describe("PdfReader plugin", async () => {
         return true;
       },
     );
+  });
+
+  it("is non-blocking (returns a promise)", async () => {
+    const plugin = await PdfReader();
+    const beforeHook = plugin["tool.execute.before"];
+    const output = { args: { filePath: TEST_PDF } };
+    const result = beforeHook({ tool: "read" }, output);
+    assert.ok(result instanceof Promise, "hook should return a promise (async/non-blocking)");
+    await result;
   });
 });
