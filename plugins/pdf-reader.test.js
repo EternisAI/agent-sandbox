@@ -1,9 +1,10 @@
 import { describe, it, before } from "node:test";
 import assert from "node:assert/strict";
 import { PdfReader } from "./pdf-reader.js";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 
 const TEST_PDF = "/tmp/test-pdf-with-images.pdf";
+const TEST_IMAGE_ONLY_PDF = "/tmp/test-image-only.pdf";
 
 describe("PdfReader plugin", async () => {
   let hook;
@@ -11,6 +12,29 @@ describe("PdfReader plugin", async () => {
   before(async () => {
     const plugin = await PdfReader();
     hook = plugin["tool.execute.before"];
+
+    // Create a test PDF with text
+    const { execFileSync } = await import("node:child_process");
+    execFileSync("python3", ["-c", `
+import pymupdf
+doc = pymupdf.open()
+page = doc.new_page()
+page.insert_text(pymupdf.Point(72, 72), "Hello World")
+doc.save("${TEST_PDF}")
+    `]);
+
+    // Create an image-only PDF (no text, just a colored rectangle rendered as a page)
+    execFileSync("python3", ["-c", `
+import pymupdf
+doc = pymupdf.open()
+for i in range(3):
+    page = doc.new_page(width=200, height=200)
+    shape = page.new_shape()
+    shape.draw_rect(pymupdf.Rect(10, 10, 190, 190))
+    shape.finish(color=(0, 0, 0), fill=(0.2 * (i + 1), 0.3 * (i + 1), 0.8))
+    shape.commit()
+doc.save("${TEST_IMAGE_ONLY_PDF}")
+    `]);
   });
 
   it("skips non-read tools", async () => {
@@ -42,6 +66,23 @@ describe("PdfReader plugin", async () => {
     await hook({ tool: "read" }, output);
     assert.ok(Date.now() - start < 100, "cached extraction should be near-instant");
     assert.ok(output.args.filePath.endsWith(".md"));
+  });
+
+  it("renders page images for image-only PDFs", async () => {
+    const output = { args: { filePath: TEST_IMAGE_ONLY_PDF } };
+    await hook({ tool: "read" }, output);
+
+    assert.ok(output.args.filePath.endsWith(".md"));
+    const content = readFileSync(output.args.filePath, "utf-8");
+    assert.ok(content.includes("image-only PDF"), "should identify as image-only");
+    assert.ok(content.includes("Page Images"), "should list page images");
+    assert.ok(content.includes("_page1.jpg"), "should have page 1 image path");
+    assert.ok(content.includes("_page3.jpg"), "should have page 3 image path");
+
+    // Verify JPEG files actually exist
+    const match = content.match(/- (.+_page1\.jpg)/);
+    assert.ok(match, "should contain page 1 path");
+    assert.ok(existsSync(match[1].trim()), "page 1 JPEG should exist on disk");
   });
 
   it("passes through missing files (ENOENT)", async () => {
