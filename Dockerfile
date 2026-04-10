@@ -22,7 +22,7 @@ RUN corepack enable && corepack prepare pnpm@10.6.5 --activate
 
 RUN pip install --no-cache-dir uv==0.6.12 massive==2.4.0 fredapi==0.5.2 sec-api==1.0.35 pymupdf4llm==1.27.2.2 finnhub-python==2.4.20
 
-RUN npm install -g opencode-ai@1.3.2
+RUN npm install -g opencode-ai@1.4.3
 
 
 RUN useradd -m -s /bin/bash sandbox \
