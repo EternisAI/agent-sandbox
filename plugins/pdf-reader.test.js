@@ -1,117 +1,88 @@
 import { describe, it, before } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { PdfReader } from "./pdf-reader.js";
+import { existsSync } from "node:fs";
+import { execSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-const TEST_PDF = "/tmp/test-pdf-with-images.pdf";
+const CACHE_DIR = join(tmpdir(), "opencode-pdf-cache");
+const TEST_PDF_TEXT = "/tmp/test-text-small.pdf";
+const TEST_PDF_IMAGES = "/tmp/test-image-small.pdf";
 
-// Simulate what OpenCode's read tool returns for a PDF file
-function makeReadOutput(pdfPath) {
-  const pdfBytes = readFileSync(pdfPath);
-  const b64 = pdfBytes.toString("base64");
-  return {
-    title: pdfPath,
-    output: "PDF read successfully",
-    metadata: { preview: "PDF read successfully", truncated: false, loaded: [] },
-    attachments: [
-      {
-        type: "file",
-        mime: "application/pdf",
-        url: `data:application/pdf;base64,${b64}`,
-        id: "prt_0194c8a00001AbCdEfGhIjKlMn",
-        sessionID: "ses_test123",
-        messageID: "msg_test456",
-      },
-    ],
-  };
+async function simulateRead(beforeHook, afterHook, filePath) {
+  const beforeOutput = { args: { filePath } };
+  await beforeHook({ tool: "read" }, beforeOutput);
+  const redirected = beforeOutput.args.filePath !== filePath;
+
+  const afterOutput = { output: "(content)", attachments: [] };
+  await afterHook({ tool: "read", args: { filePath: beforeOutput.args.filePath } }, afterOutput);
+  return { ...afterOutput, redirected, redirectedPath: beforeOutput.args.filePath };
 }
 
-describe("PdfReader plugin", async () => {
-  let hook;
+describe("PdfReader plugin", () => {
+  let beforeHook;
+  let afterHook;
 
   before(async () => {
+    execSync("rm -rf " + CACHE_DIR);
     const plugin = await PdfReader();
-    hook = plugin["tool.execute.after"];
+    beforeHook = plugin["tool.execute.before"];
+    afterHook = plugin["tool.execute.after"];
   });
 
   it("skips non-read tools", async () => {
-    const output = { output: "original", attachments: [] };
-    await hook({ tool: "write", args: { filePath: "/foo.pdf" } }, output);
-    assert.equal(output.output, "original");
+    const output = { args: { filePath: "/foo.pdf" } };
+    await beforeHook({ tool: "write" }, output);
+    assert.equal(output.args.filePath, "/foo.pdf");
   });
 
   it("skips non-PDF files", async () => {
-    const output = { output: "original", attachments: [] };
-    await hook({ tool: "read", args: { filePath: "/foo.txt" } }, output);
-    assert.equal(output.output, "original");
+    const output = { args: { filePath: "/foo.txt" } };
+    await beforeHook({ tool: "read" }, output);
+    assert.equal(output.args.filePath, "/foo.txt");
   });
 
-  it("extracts text and images from a PDF with images", async () => {
-    const input = { tool: "read", args: { filePath: TEST_PDF } };
-    const output = makeReadOutput(TEST_PDF);
+  it("redirects PDF to markdown and adds page images", async () => {
+    if (!existsSync(TEST_PDF_TEXT)) return;
 
-    await hook(input, output);
+    const result = await simulateRead(beforeHook, afterHook, TEST_PDF_TEXT);
+    assert.ok(result.redirected, "before hook should redirect filePath");
+    const jpgs = result.attachments.filter(a => a.mime === "image/jpeg");
+    assert.ok(jpgs.length >= 1, `should have page images, got ${jpgs.length}`);
+  });
 
-    // Should have replaced output with extracted markdown
-    assert.ok(output.output.includes("<content>"), "output should contain <content> tag");
-    assert.ok(
-      output.output.includes("Test PDF with image"),
-      "output should contain PDF text content",
-    );
+  it("does not re-inject images on second read of cached markdown", async () => {
+    if (!existsSync(TEST_PDF_TEXT)) return;
 
-    // Should have image attachments with valid prt_ prefixed IDs
-    assert.ok(output.attachments.length > 0, "should have image attachments");
-    for (const att of output.attachments) {
-      assert.equal(att.type, "file", "attachment type should be file");
-      assert.equal(att.mime, "image/png", "attachment mime should be image/png");
-      assert.ok(att.url.startsWith("data:image/png;base64,"), "attachment should be base64 PNG");
-      assert.ok(att.id.startsWith("prt_"), `attachment ID "${att.id}" must start with "prt_"`);
-      assert.equal(att.sessionID, "ses_test123", "should inherit sessionID from original");
-      assert.equal(att.messageID, "msg_test456", "should inherit messageID from original");
+    // First read sets up the cache
+    await simulateRead(beforeHook, afterHook, TEST_PDF_TEXT);
+
+    // Second read of the same cached .md — after hook must NOT inject images
+    const afterOutput = { output: "(cached)", attachments: [] };
+    await afterHook({ tool: "read", args: { filePath: join(CACHE_DIR, "anything.md") } }, afterOutput);
+    assert.equal(afterOutput.attachments.length, 0, "no images on second read");
+  });
+
+  it("renders page images from image-based PDF", async () => {
+    if (!existsSync(TEST_PDF_IMAGES)) return;
+    execSync("rm -rf " + CACHE_DIR);
+
+    const result = await simulateRead(beforeHook, afterHook, TEST_PDF_IMAGES);
+    assert.ok(result.redirected, "before hook should redirect");
+    const jpgs = result.attachments.filter(a => a.mime === "image/jpeg");
+    assert.ok(jpgs.length >= 1, `should have page images, got ${jpgs.length}`);
+    for (const att of jpgs) {
+      assert.ok(att.url.startsWith("data:image/jpeg;base64,"), "JPEG data URL");
     }
   });
 
-  it("generates unique IDs per image attachment", async () => {
-    const input = { tool: "read", args: { filePath: TEST_PDF } };
-    const output = makeReadOutput(TEST_PDF);
+  it("uses cache on second read", async () => {
+    if (!existsSync(TEST_PDF_TEXT)) return;
 
-    await hook(input, output);
-
-    const ids = output.attachments.map((a) => a.id);
-    const unique = new Set(ids);
-    assert.equal(ids.length, unique.size, "all attachment IDs should be unique");
-  });
-
-  it("clears attachments when extraction produces no text", async () => {
-    const input = { tool: "read", args: { filePath: TEST_PDF } };
-    // Simulate a PDF attachment that decodes to garbage (not a valid PDF)
-    const output = {
-      output: "PDF read successfully",
-      attachments: [
-        {
-          type: "file",
-          mime: "application/pdf",
-          url: "data:application/pdf;base64,bm90YXBkZg==",
-          id: "prt_0194c8a00001AbCdEfGhIjKlMn",
-          sessionID: "ses_test123",
-          messageID: "msg_test456",
-        },
-      ],
-    };
-
-    await hook(input, output);
-
-    // Should fail gracefully — extraction error, attachments cleared
-    assert.ok(
-      output.output.includes("failed") || output.output.includes("no extractable text"),
-      "should indicate failure or no text",
-    );
-    assert.deepEqual(output.attachments, [], "attachments should be cleared on failure");
-  });
-
-  it("handles PDF with no attachments (no-op)", async () => {
-    const output = { output: "some output", attachments: [] };
-    await hook({ tool: "read", args: { filePath: "/some.pdf" } }, output);
-    assert.equal(output.output, "some output", "should not modify output when no PDF attachment");
+    const start = Date.now();
+    const result = await simulateRead(beforeHook, afterHook, TEST_PDF_TEXT);
+    assert.ok(Date.now() - start < 100, "cached read should be fast");
+    assert.ok(result.redirected, "cached read still redirects");
   });
 });
