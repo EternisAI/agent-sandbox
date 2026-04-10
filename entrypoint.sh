@@ -9,6 +9,7 @@ export OPENCODE_DB=/data/opencode/opencode.db
 
 cat > /home/sandbox/.config/opencode/opencode.json <<EOF
 {
+  "permission": "allow",
   "provider": {
     "openrouter": {
       "npm": "@ai-sdk/openai",
