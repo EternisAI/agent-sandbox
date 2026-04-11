@@ -51,7 +51,7 @@ export const PdfReader = async () => {
         const mdPath = await extractPdf(filePath);
         output.args.filePath = mdPath;
       } catch (e) {
-        if (e.code === "ENOENT") return; // let read tool handle missing files
+        if (e.code === "ENOENT" && e.syscall === "stat") return; // PDF file missing — let read tool handle it
         throw new Error(
           `PDF extraction failed: ${e.message}. ` +
           `Write a Python script to extract text and images:\n` +
