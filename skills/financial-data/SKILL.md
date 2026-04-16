@@ -121,14 +121,14 @@ All economy methods accept date filters: `date=`, `date_gt=`, `date_gte=`, `date
 
 - `get_ticker_details()` -> TickerDetails -- name, market_cap, description, sic_code, etc.
 - `list_tickers()` -> Iterator[Ticker]
-- `list_ticker_news()` -> Iterator[TickerNews]
+- `list_ticker_news()` -> Iterator[TickerNews] -- **SLOW/large payloads**, always set `limit=5` to `limit=10`; prefer `next(iter(...))` for latest
 - `get_related_companies()` -> RelatedCompany
 - `get_ticker_events(ticker)` -> TickerChangeResults -- corporate events (name changes, mergers, etc.)
 - `get_ticker_types()` -> List[TickerTypes] -- filter with `asset_class=`, `locale=`
 - `list_dividends()` -> Iterator[Dividend]
 - `list_splits()` -> Iterator[Split]
-- `list_short_volume()` -> List[ShortVolume]
-- `list_short_interest()` -> List[ShortInterest]
+- `list_short_volume()` -> Iterator[ShortVolume] -- auto-paginates, wrap with `list()`
+- `list_short_interest()` -> Iterator[ShortInterest] -- auto-paginates, wrap with `list()`
 - `list_stocks_dividends()` -> Iterator[StockDividend] -- filter with `ticker=`, `ex_dividend_date=`, `limit=`
 - `list_stocks_splits()` -> Iterator[StockSplit] -- filter with `ticker=`, `execution_date=`, `limit=`
 - `get_exchanges()` -> List[Exchange] -- filter with `asset_class=`, `locale=`
@@ -160,22 +160,6 @@ All economy methods accept date filters: `date=`, `date_gt=`, `date_gte=`, `date
 - `last_quote`: bid/ask data (may be None when market closed)
 - `last_trade`: last trade data (may be None when market closed)
 - `underlying_asset`: underlying ticker info
-
-### SEC Filings (detailed)
-
-- `list_stocks_filings_index()` -> Iterator[FilingIndex] -- SEC filings index
-- `list_stocks_filings_10k_sections()` -> Iterator[FilingSection] -- 10-K section text, filter with `ticker=`, `limit=`
-- `list_stocks_filings_8k_text()` -> Iterator[Filing8K] -- 8-K filing text, filter with `ticker=`, `limit=`
-- `list_stocks_filings_risk_factors()` -> Iterator[RiskFactor] -- extracted risk factors, filter with `ticker=`, `filing_date=`, `limit=`
-- `list_stocks_taxonomies_risk_factors()` -> Iterator[RiskFactorTaxonomy] -- risk factor taxonomy/categories
-
-**FilingSection fields:** `ticker` (str), `cik` (str), `filing_date` (str), `filing_url` (str), `period_end` (str), `section` (str), `text` (str)
-
-**Filing8K fields:** `ticker` (str), `cik` (str), `filing_date` (str), `filing_url` (str), `form_type` (str), `items_text` (str), `accession_number` (str)
-
-**RiskFactor fields:** `ticker` (str), `cik` (str), `filing_date` (str), `primary_category` (str), `secondary_category` (str), `tertiary_category` (str), `supporting_text` (str)
-
-**RiskFactorTaxonomy fields:** `taxonomy`, `primary_category` (str), `secondary_category` (str), `tertiary_category` (str), `description` (str)
 
 ### Trades & Quotes (requires higher-tier plan)
 
@@ -212,11 +196,12 @@ analysts = list(client.list_benzinga_analysts(limit=50))
 
 The following SDK method groups exist in `massive==2.4.0` but are entirely blocked on the current plan. Do not call these -- they will all throw `BadResponse` with `NOT_AUTHORIZED`.
 
-- **Benzinga (8 methods still blocked):** `list_benzinga_analyst_insights`, `list_benzinga_bulls_bears_say`, `list_benzinga_consensus_ratings`, `list_benzinga_earnings`, `list_benzinga_firms`, `list_benzinga_guidance`, `list_benzinga_news`, `list_benzinga_news_v2`
+- **Benzinga (8 methods blocked):** `list_benzinga_analyst_insights`, `list_benzinga_bulls_bears_say`, `list_benzinga_consensus_ratings`, `list_benzinga_earnings`, `list_benzinga_firms`, `list_benzinga_guidance`, `list_benzinga_news`, `list_benzinga_news_v2`
 - **ETF Global (5 methods):** `get_etf_global_analytics`, `get_etf_global_constituents`, `get_etf_global_fund_flows`, `get_etf_global_profiles`, `get_etf_global_taxonomies` -- use `composite_ticker=` param (not `ticker=`)
 - **Futures (9 methods):** `get_futures_snapshot`, `list_futures_aggregates`, `list_futures_contracts`, `list_futures_exchanges`, `list_futures_market_statuses`, `list_futures_products`, `list_futures_quotes`, `list_futures_schedules`, `list_futures_trades`
 - **Summaries (1 method):** `get_summaries`
 - **TMX (1 method):** `list_tmx_corporate_events`
+- **SEC Filings (5 methods) -- use `sec-api` skill instead:** `list_stocks_filings_index`, `list_stocks_filings_10k_sections`, `list_stocks_filings_8k_text`, `list_stocks_filings_risk_factors`, `list_stocks_taxonomies_risk_factors` (Polygon responses time out on real payloads even with `limit=1`)
 
 ### Deprecated / broken
 
@@ -380,5 +365,4 @@ news = list(client.list_ticker_news(ticker="AAPL", limit=10))
 11. **All timestamps are Unix epoch milliseconds (int).** Convert with `datetime.fromtimestamp(ts / 1000)`.
 12. **Economy data frequencies differ:** treasury yields are daily, inflation is monthly. Align dates when combining.
 13. **Options `contract_type` values are lowercase strings:** `"call"` or `"put"`.
-14. **Most Benzinga endpoints plus ETF Global, Futures, Summaries, and TMX are blocked** on the current plan. `list_benzinga_ratings` and `list_benzinga_analysts` are available; see "Blocked categories" and "Benzinga" sections above.
-15. **`get_snapshot_crypto_book` is deprecated** (returns 404). Use crypto aggregates instead.
+14. **`get_snapshot_crypto_book` is deprecated** (returns 404). Use crypto aggregates instead.
