@@ -196,11 +196,23 @@ All economy methods accept date filters: `date=`, `date_gt=`, `date_gte=`, `date
 - `get_market_status()` -> MarketStatus -- `market` (str: "open"/"closed"), `server_time` (str), `exchanges` (nested)
 - `get_market_holidays()` -> List[MarketHoliday]
 
+### Benzinga (analyst signal endpoints)
+
+- `list_benzinga_ratings()` -> Iterator[...] -- maps to `/benzinga/v1/ratings`; analyst upgrades/downgrades/PT changes
+- `list_benzinga_analysts()` -> Iterator[...] -- maps to `/benzinga/v1/analysts`; analyst track record and accuracy context
+
+Example helper calls:
+
+```python
+ratings = list(client.list_benzinga_ratings(limit=50))
+analysts = list(client.list_benzinga_analysts(limit=50))
+```
+
 ### Blocked categories (NOT_AUTHORIZED on current plan)
 
 The following SDK method groups exist in `massive==2.4.0` but are entirely blocked on the current plan. Do not call these -- they will all throw `BadResponse` with `NOT_AUTHORIZED`.
 
-- **Benzinga (10 methods):** `list_benzinga_analyst_insights`, `list_benzinga_analysts`, `list_benzinga_bulls_bears_say`, `list_benzinga_consensus_ratings`, `list_benzinga_earnings`, `list_benzinga_firms`, `list_benzinga_guidance`, `list_benzinga_news`, `list_benzinga_news_v2`, `list_benzinga_ratings`
+- **Benzinga (8 methods still blocked):** `list_benzinga_analyst_insights`, `list_benzinga_bulls_bears_say`, `list_benzinga_consensus_ratings`, `list_benzinga_earnings`, `list_benzinga_firms`, `list_benzinga_guidance`, `list_benzinga_news`, `list_benzinga_news_v2`
 - **ETF Global (5 methods):** `get_etf_global_analytics`, `get_etf_global_constituents`, `get_etf_global_fund_flows`, `get_etf_global_profiles`, `get_etf_global_taxonomies` -- use `composite_ticker=` param (not `ticker=`)
 - **Futures (9 methods):** `get_futures_snapshot`, `list_futures_aggregates`, `list_futures_contracts`, `list_futures_exchanges`, `list_futures_market_statuses`, `list_futures_products`, `list_futures_quotes`, `list_futures_schedules`, `list_futures_trades`
 - **Summaries (1 method):** `get_summaries`
@@ -368,5 +380,5 @@ news = list(client.list_ticker_news(ticker="AAPL", limit=10))
 11. **All timestamps are Unix epoch milliseconds (int).** Convert with `datetime.fromtimestamp(ts / 1000)`.
 12. **Economy data frequencies differ:** treasury yields are daily, inflation is monthly. Align dates when combining.
 13. **Options `contract_type` values are lowercase strings:** `"call"` or `"put"`.
-14. **Benzinga, ETF Global, Futures, Summaries, and TMX are all blocked** on the current plan. See "Blocked categories" section above.
+14. **Most Benzinga endpoints plus ETF Global, Futures, Summaries, and TMX are blocked** on the current plan. `list_benzinga_ratings` and `list_benzinga_analysts` are available; see "Blocked categories" and "Benzinga" sections above.
 15. **`get_snapshot_crypto_book` is deprecated** (returns 404). Use crypto aggregates instead.
