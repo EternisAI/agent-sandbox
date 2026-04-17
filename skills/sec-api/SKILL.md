@@ -29,7 +29,7 @@ XBRL_URL="${PROXY_BASE}/xbrl-to-json?token=${TOKEN_ENC}"
 | --- | --- | --- | --- | --- | --- |
 | 8-K | Material event between scheduled filings | Event-driven | HF, VC | `POST /` + `POST /extractor` (35 item types) | Supported |
 | Form 4 | Insider buy/sell by officers/directors | Within 2 days | HF | `POST /insider-trading` | Supported |
-| 13D | Activist investor crosses 5% with intent | Within 5 business days | HF, VC | `POST /` + `POST /extractor` or agent parsing | Business plan only |
+| 13D | Activist investor crosses 5% with intent | Within 5 business days | HF, VC | `POST /form-13d-13g` + `POST /extractor` | Supported |
 | 10-Q | Quarterly financials, MD&A, risk updates | 3x per year | HF, VC | `POST /` + `POST /extractor` + `GET /xbrl-to-json` | Supported |
 | 13F | Institutional holdings ($100M+ AUM) | Quarterly | HF, VC | `POST /form-13f/holdings` + `POST /form-13f/cover-pages` | Supported |
 | 10-K | Annual financials, risks, business overview | Yearly | HF, VC | `POST /` + `POST /extractor` + `GET /xbrl-to-json` | Supported |
@@ -110,8 +110,7 @@ Use for filing content keyword queries across all forms.
 
 - Use full strings: `SC 13D`, `SC 13G`, `SC 13D/A`, `SC 13G/A`.
 - `cusip` is target company, `cik` is filer.
-- 13D is business-plan only; do not rely on the dedicated 13D endpoint in this environment.
-- For 13D in this environment, use Query API retrieval and extract details via Section Extractor or agent parsing.
+- Use `POST /form-13d-13g` for 13D filings; combine with Section Extractor for detailed text extraction.
 
 ### Form S-1/424B4 (`POST /form-s1-424b4`)
 
