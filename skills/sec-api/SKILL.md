@@ -121,12 +121,16 @@ One endpoint for both registration and final prospectus retrieval.
 
 - `year` filters are integer-based.
 - Position titles are free-form text and not normalized.
+- **`/compensation` returns a flat JSON array**, not `{total, data}`. Iterate directly over the response.
+- **`/directors-and-board-members` nests director records** under `data[*].directors[*]` — not top-level fields on the filing object.
 
 ### N-PORT (`POST /form-nport`), Form 144 (`POST /form-144`), Form D (`POST /form-d`)
 
 - N-PORT is monthly fund holdings.
 - Form 144 is proposed pre-sale notice data.
 - Form D has no ticker; search by entity metadata.
+- **N-PORT: use `filedAt` date range for filtering** — `periodOfReport` returns 0 results. Example: `"filedAt:[2024-01-01 TO 2024-12-31]"`.
+- **Form D response uses `offerings` key**, not `data`. Access results as `response["offerings"]`.
 
 ## Example: CIK -> latest 10-K -> Risk Factors + XBRL
 
