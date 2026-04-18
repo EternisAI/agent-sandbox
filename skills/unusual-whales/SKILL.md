@@ -136,10 +136,6 @@ For authoritative financials (10-K/10-Q line items, restatements, amendments), u
 - **Congress Trader:** `api/congress/congress-trader`
 - **Late Reports:** `api/congress/late-reports`
 - **Politician Recent Trades:** `api/politician-portfolios/recent_trades` — working on our plan
-- **Politicians List:** `api/politician-portfolios/people` — PREMIUM (enterprise only); HTTP 422 `"Missing access for politician ports. This is an enterprise only endpoint."`
-- **Politician Portfolio:** `api/politician-portfolios/{politician_id}` — PREMIUM; HTTP 422
-- **Politician Disclosures:** `api/politician-portfolios/disclosures` — PREMIUM; HTTP 422
-- **Holders by Ticker:** `api/politician-portfolios/holders/{ticker}` — PREMIUM; HTTP 422
 
 ### Insiders
 
@@ -204,7 +200,6 @@ For raw 13F holdings (as-filed from SEC), use the `sec-api` skill.
 - **Predictions Smart Money:** `api/predictions/smart-money` — response is nested `data.data[*]`
 - **Predictions Insiders:** `api/predictions/insiders` — response is nested `data.data[*]`; each row has a numeric `asset_id`
 - **Predictions Market:** `api/predictions/market/{asset_id}` — rich market-detail object; `asset_id` is a long numeric string discovered from the four predictions endpoints above
-- **Market Positions:** `api/predictions/market/{asset_id}/positions` — HashDive upstream dependency; consistently returns HTTP 422 `"HashDive API error: 403"` on our plan
 - **Market Liquidity:** `api/predictions/market/{asset_id}/liquidity` — full order book (bids/asks/best_bid/best_ask)
 - **Option Contract Flow:** `api/option-contract/{id}/flow` — `side` is lowercase; stale/expired contract IDs return HTTP 500. Always use fresh IDs from `/api/stock/{ticker}/option-contracts`.
 - **Option Contract Historic:** `api/option-contract/{id}/historic` — response is a flat dict without a `data` wrapper
@@ -311,6 +306,6 @@ for d in data[:10]:
 - Most endpoints silently return `[]` (HTTP 200) on weekend/holiday dates and invalid tickers — cannot distinguish "no data" from "wrong param".
 - Rate limits: 120 req/min, 20000 req/day (resets 8 PM Eastern). Track via response headers `x-uw-req-per-minute-remaining`, `x-uw-daily-req-count`, `x-uw-token-req-limit`.
 - HTTP semantics: `401` = missing/invalid token; `429` = per-minute or daily quota exceeded (body contains `"Approaching daily quota"`); `422` = premium/enterprise-gated endpoints not on our plan (body: `"Missing access for ... enterprise only endpoint"`) OR missing/invalid required params.
-- **Premium endpoints not available on our plan** (always return HTTP 422 — do not call): `stock/{ticker}/ownership`, `politician-portfolios/people`, `politician-portfolios/{politician_id}`, `politician-portfolios/disclosures`, `politician-portfolios/holders/{ticker}`. Of the Congress & Politicians group, only `politician-portfolios/recent_trades` is accessible.
+- **Endpoints not available on our plan** (always return HTTP 422 — do not call): `stock/{ticker}/ownership`, `politician-portfolios/people`, `politician-portfolios/{politician_id}`, `politician-portfolios/disclosures`, `politician-portfolios/holders/{ticker}`, `predictions/market/{asset_id}/positions` (HashDive dependency error). Of the Congress & Politicians group, only `politician-portfolios/recent_trades` is accessible.
 - Boolean filter params (`is_call`, `is_put`, `is_floor`, `is_sweep`, etc.) filter-when-set — leave unset for "no filter".
 - Most endpoints wrap payload in `{data: [...]}`, but some return a top-level JSON list (`stock/flow-recent`, `stock/flow-per-expiry`, `stock/flow-per-strike`) or a flat dict without a `data` key (`etfs/{ticker}/weights`, `shorts/{ticker}/volume-and-ratio`, `option-contract/{id}/historic`). Inspect `type(resp.json())` before calling `.get('data')`. Prediction endpoints (`predictions/unusual`, `whales`, `smart-money`, `insiders`) wrap twice: `data.data[*]`.

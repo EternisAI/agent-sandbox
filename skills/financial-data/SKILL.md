@@ -107,12 +107,8 @@ All economy methods accept date filters: `date=`, `date_gt=`, `date_gte=`, `date
 
 **FedInflation fields:** `date` (str), `cpi`, `cpi_core`, `cpi_year_over_year`, `pce`, `pce_core`, `pce_spending` -- numeric fields may be `None` for recent/incomplete periods
 
-### Financials (requires higher-tier plan)
+### Financials
 
-- `list_financials_income_statements()` -> Iterator[FinancialIncomeStatement] -- **NOT_AUTHORIZED on current plan**
-- `list_financials_balance_sheets()` -> Iterator[FinancialBalanceSheet] -- **NOT_AUTHORIZED on current plan**
-- `list_financials_cash_flow_statements()` -> Iterator[FinancialCashFlowStatement] -- **NOT_AUTHORIZED on current plan**
-- `list_financials_ratios()` -> Iterator[FinancialRatio] -- **NOT_AUTHORIZED on current plan**
 - `list_stocks_floats()` -> Iterator[FinancialFloat] -- filter with `ticker=`, `limit=`
 
 **FinancialFloat fields:** `ticker` (str), `effective_date` (str), `free_float` (int), `free_float_percent` (float)
@@ -161,13 +157,6 @@ All economy methods accept date filters: `date=`, `date_gt=`, `date_gte=`, `date
 - `last_trade`: last trade data (may be None when market closed)
 - `underlying_asset`: underlying ticker info
 
-### Trades & Quotes (requires higher-tier plan)
-
-- `get_last_trade(ticker)` -> LastTrade -- **NOT_AUTHORIZED on current plan**
-- `list_trades(ticker)` -> Iterator[Trade] -- **NOT_AUTHORIZED on current plan**
-- `get_last_quote(ticker)` -> LastQuote -- **NOT_AUTHORIZED on current plan**
-- `list_quotes(ticker)` -> Iterator[Quote] -- **NOT_AUTHORIZED on current plan**
-
 ### Forex & Crypto
 
 - `get_last_forex_quote(from_, to)` -> LastForexQuote
@@ -198,6 +187,8 @@ analysts = list(itertools.islice(client.list_benzinga_analysts(), 50))
 
 The following SDK method groups exist in `massive==2.4.0` but are entirely blocked on the current plan. Do not call these -- they will all throw `BadResponse` with `NOT_AUTHORIZED`.
 
+- **Financials (4 methods):** `list_financials_income_statements`, `list_financials_balance_sheets`, `list_financials_cash_flow_statements`, `list_financials_ratios` -- use `sec-api` skill XBRL endpoint instead
+- **Trades & Quotes (4 methods):** `get_last_trade`, `list_trades`, `get_last_quote`, `list_quotes` -- use `get_previous_close_agg` + `get_aggs` instead
 - **Benzinga (8 methods blocked):** `list_benzinga_analyst_insights`, `list_benzinga_bulls_bears_say`, `list_benzinga_consensus_ratings`, `list_benzinga_earnings`, `list_benzinga_firms`, `list_benzinga_guidance`, `list_benzinga_news`, `list_benzinga_news_v2`
 - **ETF Global (5 methods):** `get_etf_global_analytics`, `get_etf_global_constituents`, `get_etf_global_fund_flows`, `get_etf_global_profiles`, `get_etf_global_taxonomies` -- use `composite_ticker=` param (not `ticker=`)
 - **Futures (9 methods):** `get_futures_snapshot`, `list_futures_aggregates`, `list_futures_contracts`, `list_futures_exchanges`, `list_futures_market_statuses`, `list_futures_products`, `list_futures_quotes`, `list_futures_schedules`, `list_futures_trades`
@@ -354,8 +345,7 @@ news = list(itertools.islice(client.list_ticker_news(ticker="AAPL"), 10))
 1. **`get_previous_close_agg` returns a list**, not a single object. Access `[0]` for the result.
 2. **`get_aggs` returns bars in chronological order** (oldest first). The last element is the most recent bar.
 3. **`get_snapshot_ticker` fields can be `None`/zeroed when market is closed.** `last_trade` and `last_quote` will be `None`, `day` OHLCV will be all zeros. Always null-check: `if snap.last_trade is not None:`.
-4. **`get_last_trade`, `get_last_quote`, `list_trades`, `list_quotes` require a higher-tier plan.** They throw `BadResponse` with `NOT_AUTHORIZED`. Use `get_previous_close_agg` + `get_aggs` instead.
-5. **Financials endpoints (`list_financials_*`) require higher-tier plans** -- same `NOT_AUTHORIZED` error. `list_stocks_floats` works on the current plan.
+4. **Trades/quotes and financials methods are blocked** -- see Blocked categories section. Use `get_previous_close_agg` + `get_aggs` for price data; use `sec-api` XBRL for financials.
 6. **Indicator methods return wrapper objects, NOT iterables.** Access `.values` to get the list.
 7. **Parameter names use `tickers` (plural)** for financials methods, not `ticker`. ETF Global methods use `composite_ticker=`, not `ticker=`.
 8. **Rate limits:** add `time.sleep(0.5)` between rapid-fire calls.
