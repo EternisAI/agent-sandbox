@@ -86,7 +86,7 @@ All field values are **floats** unless noted. Timestamps are **int** (Unix epoch
 - `get_snapshot_all(market_type)` -> List[TickerSnapshot]
 - `get_snapshot_option(underlying_asset, option_contract)` -> OptionContractSnapshot -- single option contract snapshot
 - `get_snapshot_direction(market_type, direction)` -> List[TickerSnapshot] -- `direction` is `"gainers"` or `"losers"`
-- `get_snapshot_indices()` -> List[IndicesSnapshot] -- filter with `ticker_any_of=`
+- `get_snapshot_indices()` -> List[IndicesSnapshot] -- filter with `ticker_any_of=["I:SPX", "I:DJI"]` (must be a list — passing a string silently returns wrong results)
 - `list_universal_snapshots()` -> Iterator[UniversalSnapshot]
 - `list_snapshot_options_chain(underlying_asset)` -> Iterator[OptionContractSnapshot]
 
@@ -118,7 +118,7 @@ All economy methods accept date filters: `date=`, `date_gt=`, `date_gte=`, `date
 - `get_ticker_details()` -> TickerDetails -- name, market_cap, description, sic_code, etc.
 - `list_tickers()` -> Iterator[Ticker]
 - `list_ticker_news()` -> Iterator[TickerNews] -- **SLOW/large payloads**, always set `limit=5` to `limit=10`; prefer `next(iter(...))` for latest
-- `get_related_companies()` -> RelatedCompany
+- `get_related_companies()` -> List[RelatedCompany] -- each item has `.ticker` (str) only; access as `[r.ticker for r in result]`
 - `get_ticker_events(ticker)` -> TickerChangeResults -- corporate events (name changes, mergers, etc.)
 - `get_ticker_types()` -> List[TickerTypes] -- filter with `asset_class=`, `locale=`
 - `list_dividends()` -> Iterator[Dividend]
@@ -159,9 +159,9 @@ All economy methods accept date filters: `date=`, `date_gt=`, `date_gte=`, `date
 
 ### Forex & Crypto
 
-- `get_last_forex_quote(from_, to)` -> LastForexQuote
-- `get_real_time_currency_conversion(from_, to)` -> RealTimeCurrencyConversion
-- `get_last_crypto_trade(from_, to)` -> CryptoTrade
+- `get_last_forex_quote(from_, to)` -> LastForexQuote -- `symbol` (str), `last` (ForexQuote: `ask`, `bid`, `exchange`, `timestamp`)
+- `get_real_time_currency_conversion(from_, to)` -> RealTimeCurrencyConversion -- `converted` (float), `from_` (str), `to` (str), `initial_amount` (float), `last` (ForexQuote)
+- `get_last_crypto_trade(from_, to)` -> CryptoTrade -- `price` (float), `size` (float), `timestamp` (int), `exchange` (int), `conditions` (List[int])
 - Crypto/forex aggregates: use `get_aggs("X:BTCUSD", ...)` or `get_aggs("C:EURUSD", ...)`
 
 ### Other
