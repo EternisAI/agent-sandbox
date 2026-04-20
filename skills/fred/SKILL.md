@@ -6,7 +6,7 @@ allowed-tools: Bash(python3 -c *), Bash(python3 - *), Bash(python3 *)
 
 # Macroeconomics API (FRED Proxy)
 
-Use the `fredapi` Python package through the backend proxy. Do not use raw vendor API keys.
+Use direct HTTP requests through the backend FRED proxy. Do not use raw vendor API keys or the fredapi SDK.
 
 ## Authentication and Base URL Override
 
@@ -15,23 +15,14 @@ import os
 import urllib.parse
 import urllib.request
 import json
-from fredapi import Fred
 
 base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/fred-proxy")
 token = os.environ["OPENROUTER_API_KEY"]
 
-fred = Fred(api_key=token)
-fred.root_url = base.rstrip("/")
-
 def fred_proxy_get(path: str, params: dict | None = None) -> dict:
-    query = urllib.parse.urlencode(params or {})
-    url = f"{base.rstrip('/')}/{path.lstrip('/')}"
-    if query:
-        url += f"?{query}"
-    # fredapi-compatible auth: send proxy token in api_key query param
-    sep = "&" if "?" in url else "?"
-    url += f"{sep}api_key={urllib.parse.quote(token)}"
-    req = urllib.request.Request(url)
+    query = urllib.parse.urlencode({"file_type": "json", **(params or {})})
+    url = f"{base.rstrip('/')}/{path.lstrip('/')}?{query}"
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
     with urllib.request.urlopen(req, timeout=20) as resp:
         return json.loads(resp.read().decode())
 ```
@@ -54,18 +45,18 @@ Only use these functions/endpoints in this skill:
 
 ```python
 def search_fred_series(query: str, limit: int = 10):
-    return fred.search(query, limit=limit, order_by="search_rank", sort_order="desc")
+    return fred_proxy_get("series/search", {"search_text": query, "limit": limit, "order_by": "search_rank", "sort_order": "desc"})["seriess"]
 
 def get_fred_series(series_id: str, observation_start: str | None = None, units: str | None = None):
-    kwargs = {}
+    params = {"series_id": series_id}
     if observation_start:
-        kwargs["observation_start"] = observation_start
+        params["observation_start"] = observation_start
     if units:
-        kwargs["units"] = units
-    return fred.get_series(series_id, **kwargs)
+        params["units"] = units
+    return fred_proxy_get("series/observations", params)["observations"]
 
 def get_fred_series_info(series_id: str):
-    return fred.get_series_info(series_id)
+    return fred_proxy_get("series", {"series_id": series_id})["seriess"][0]
 
 def get_popular_fred_series():
     return ["CPIAUCSL", "UNRATE", "DGS10"]
@@ -91,8 +82,6 @@ updates = get_fred_series_updates()
 
 ## Notes
 
-- Use `GET` only.
-- Keep `fred.root_url` overridden to the proxy base from `OPENROUTER_BASE_URL`.
-- For direct endpoint calls, include `file_type=json` in query params; if omitted, FRED defaults to XML responses.
+- Use `GET` only via `fred_proxy_get`; `file_type=json` is injected automatically.
 - Keep results concise: process data in Python and print summarized outputs.
 - Use `limit=` for list endpoints to avoid large responses.

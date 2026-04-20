@@ -1,6 +1,6 @@
 ---
 name: finnhub
-description: Fetch EPS/revenue estimates, earnings transcripts, analyst recommendations, insider sentiment (MSPR), social sentiment, lobbying data, and USA spending via the Finnhub Python SDK through the backend proxy. Use when users ask for earnings estimates, call transcripts, analyst consensus, insider MSPR, Reddit/Twitter sentiment, lobbying spend, or government contracts.
+description: Fetch EPS/revenue estimates, analyst recommendations, insider sentiment (MSPR), social sentiment, lobbying data, and USA spending via the Finnhub Python SDK through the backend proxy. Use when users ask for earnings estimates, analyst consensus, insider MSPR, Reddit/Twitter sentiment, lobbying spend, or government contracts.
 allowed-tools: Bash(python3 -c *), Bash(python3 - *), Bash(python3 *)
 ---
 
@@ -25,13 +25,12 @@ The SDK sends `token=` as a query param automatically. Override `client.API_URL`
 
 ## Supported Endpoints
 
-Only use these 8 functions in this skill:
+Only use these 6 functions in this skill:
 
 | Function | SDK method | API path | Signal | Cadence |
 | --- | --- | --- | --- | --- |
 | EPS Estimates | `company_eps_estimates` | `/stock/eps-estimate` | Forward EPS consensus by quarter/year | Quarterly |
 | Revenue Estimates | `company_revenue_estimates` | `/stock/revenue-estimate` | Forward revenue consensus by quarter/year | Quarterly |
-| Earnings Transcripts | `transcripts` / `transcripts_list` | `/stock/transcripts`, `/stock/transcripts/list` | Full earnings call Q&A text | Per earnings event |
 | Analyst Recommendations | `recommendation_trends` | `/stock/recommendation` | Aggregate buy/hold/sell consensus history | Per analyst action |
 | Insider Sentiment (MSPR) | `stock_insider_sentiment` | `/stock/insider-sentiment` | Monthly Share Purchase Ratio — aggregate insider signal | Monthly |
 | Social Sentiment | `stock_social_sentiment` | `/stock/social-sentiment` | Reddit + Twitter mention counts and scores | Daily |
@@ -43,8 +42,6 @@ Only use these 8 functions in this skill:
 ```python
 client.company_eps_estimates(symbol, freq=None)          # freq: "quarterly" or "annual"
 client.company_revenue_estimates(symbol, freq=None)       # freq: "quarterly" or "annual"
-client.transcripts_list(symbol)                           # returns list of transcript IDs
-client.transcripts(_id)                                   # _id from transcripts_list e.g. "AAPL_162777"
 client.recommendation_trends(symbol)
 client.stock_insider_sentiment(symbol, _from, to)         # dates: "YYYY-MM-DD"
 client.stock_social_sentiment(symbol, _from=None, to=None)
@@ -126,29 +123,6 @@ client.stock_usa_spending(symbol, _from, to)
 
 `score` ranges -1 (very negative) to 1 (very positive). Includes both Reddit and Twitter data.
 
-### Transcripts List (`transcripts_list`)
-
-```json
-{
-  "symbol": "AAPL",
-  "transcripts": [
-    {"id": "AAPL_162777", "title": "Apple Inc Q1 2026", "time": "2026-01-30 17:00:00", "year": 2026, "quarter": 1}
-  ]
-}
-```
-
-### Transcripts (`transcripts`)
-
-```json
-{
-  "symbol": "AAPL", "title": "Apple Inc Q1 2026",
-  "transcript": [
-    {"name": "Tim Cook", "speech": ["Good afternoon...", "Revenue grew..."], "role": "CEO"},
-    {"name": "Analyst Name", "speech": ["My question is..."], "role": "Analyst"}
-  ]
-}
-```
-
 ### Lobbying (`stock_lobbying`)
 
 ```json
@@ -201,28 +175,6 @@ for e in eps.get("data", [])[:4]:
 for r in rev.get("data", [])[:4]:
     avg_b = r['revenueAvg'] / 1e9
     print(f"Q{r['quarter']} {r['year']}: Rev avg=${avg_b:.1f}B analysts={r['numberAnalysts']}")
-```
-
-### Earnings Call Transcript
-
-```python
-import os
-import finnhub
-
-proxy_base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/finnhub-proxy")
-client = finnhub.Client(api_key=os.environ["OPENROUTER_API_KEY"])
-client.API_URL = proxy_base.rstrip("/")
-
-tlist = client.transcripts_list("AAPL")
-latest = tlist["transcripts"][0]
-print(f"Latest: {latest['title']} ({latest['time']})")
-
-transcript = client.transcripts(latest["id"])
-for entry in transcript.get("transcript", [])[:10]:
-    role = entry.get("role", "")
-    name = entry.get("name", "")
-    text = " ".join(entry.get("speech", []))[:200]
-    print(f"[{role}] {name}: {text}...")
 ```
 
 ### Analyst Consensus + Insider MSPR
@@ -291,4 +243,3 @@ for d in spend.get("data", [])[:5]:
 - Process responses in Python and print concise summaries.
 - Rate limit: 30 calls/sec max. Add `time.sleep(0.1)` between rapid calls.
 - The `freq` param for estimates accepts `"quarterly"` or `"annual"`.
-- Transcript IDs come from `transcripts_list` — do not fabricate them.

@@ -1,6 +1,6 @@
 ---
 name: unusual-whales
-description: Query unusual options flow, dark pool prints, market tide, stock greek exposure, congressional/insider trading, earnings, and technical indicators via the Unusual Whales API proxy. Use when users ask for options flow alerts, whale trades, dark pool data, GEX/gamma exposure, or market sentiment.
+description: Query unusual options flow, dark pool prints, market tide, stock greek exposure, congressional/insider trading, earnings, and sector ETF data via the Unusual Whales API proxy. Use when users ask for options flow alerts, whale trades, dark pool data, GEX/gamma exposure, or market sentiment.
 allowed-tools: Bash(python3 -c *), Bash(python3 - *), Bash(python3 *)
 ---
 
@@ -42,7 +42,6 @@ All endpoints are `GET` only. Every path below is relative to the proxy base (e.
 | Contract greeks (SPY/QQQ/IWM only) | `/api/stock/{ticker}/greeks` |
 | Spot gamma / GEX / gamma exposure | `/api/stock/{ticker}/spot-exposures/expiry-strike` |
 | Earnings history | `/api/stock/{ticker}/earnings` |
-| Technical indicator (RSI, MACD, etc.) | `/api/stock/{ticker}/technical-indicator/{function}` |
 
 ## Valid Endpoint Reference
 
@@ -53,9 +52,9 @@ All endpoints are `GET` only. Every path below is relative to the proxy base (e.
   - Boolean params filter-when-set — leave unset for "no filter". `side` is uppercase.
 - **Options Screener:** `api/screener/option-contracts`
   - Params: `limit` (default is 1 — always set explicitly), `min_premium`, `type`, `is_otm`, `issue_types[]`, `min_volume_oi_ratio`, `min_ask_perc` / `max_ask_perc` (both 0–1 decimals)
+- **Unusual Tickers:** `api/option-trades/unusual-tickers` — tickers with unusual options activity right now
 - **Single Flow Alert:** `api/option-trades/flow-alerts/{id}`
 - **Stock Screener:** `api/screener/stocks`
-- **Analyst Ratings:** `api/screener/analysts`
 
 ### Stock / Ticker Data
 
@@ -72,6 +71,7 @@ All endpoints are `GET` only. Every path below is relative to the proxy base (e.
 - **Expiry Breakdown:** `api/stock/{ticker}/expiry-breakdown` — field name is `expires` (not `expiry`)
 - **Stock Volume/Price Levels:** `api/stock/{ticker}/stock-volume-price-levels`
 - **Stock Price Levels (options):** `api/stock/{ticker}/option/stock-price-levels`
+- **Companies in Sector:** `api/stock/{sector}/tickers` — returns list of ticker symbols for a sector (e.g. `"Technology"`, `"Financial Services"`, `"Health Care"`)
 
 ### Greeks, IV & GEX
 
@@ -103,13 +103,10 @@ All endpoints are `GET` only. Every path below is relative to the proxy base (e.
 For authoritative financials (10-K/10-Q line items, restatements, amendments), use the `sec-api` skill (xbrl-to-json) — it pulls directly from SEC EDGAR. UW's former `/financials`, `/income-statements`, `/balance-sheets`, `/cash-flows` endpoints are an Alpha Vantage-normalized subset of the same SEC filings with extra latency and are not documented here.
 
 - **Earnings History:** `api/stock/{ticker}/earnings` — Params: `report_type`. Reported/estimated EPS, surprise, pre/post market timing.
+- **Financial Earnings:** `api/stock/{ticker}/financials` — EPS vs estimates + surprise history. Response: `data.earnings[*]`. Fields: `report_date`, `report_type`, `fiscal_date_ending`, `report_time`, `reported_eps`, `estimated_eps`, `surprise`, `surprise_percentage`. Upcoming events have `reported_eps=None`.
 - **Fundamental Breakdown:** `api/stock/{ticker}/fundamental-breakdown` — revenue-by-product / geography segments + RSU data (UW-specific pre-aggregation)
-- **Ownership:** `api/stock/{ticker}/ownership` — PREMIUM (not available on our plan, see Usage Rules)
 - **Insider Buy/Sells:** `api/stock/{ticker}/insider-buy-sells`
 - **ATM Chains:** `api/stock/{ticker}/atm-chains` — `expirations[]` is effectively required; empty list returns HTTP 422
-- **Technical Indicators:** `api/stock/{ticker}/technical-indicator/{function}`
-  - Params: `interval`, `time_period`, `series_type`
-  - 30+ indicators (SMA, EMA, WMA, DEMA, TEMA, MACD, RSI, STOCHRSI, WILLR, ADX, CCI, ROC, ...); supports international/OTC tickers
 
 ### Dark Pool
 
@@ -125,7 +122,7 @@ For authoritative financials (10-K/10-Q line items, restatements, amendments), u
 - **Correlations:** `api/market/correlations`
   - Required: `tickers=AAPL,MSFT,GOOGL,AMZN` (uppercase, no spaces) and `interval=1y`
   - Lowercase, spaces, or missing `interval` silently return `[]`. Only `interval=1y` reliably populated.
-- **Economic Calendar:** `api/market/economic-calendar` — international + corporate macro events (FRED covers US release dates only)
+- **Sector ETFs:** `api/market/sector-etfs` — SPDR sector ETF stats (SPY, XLF, XLE, XLK, etc.)
 - **FDA Calendar:** `api/market/fda-calendar`
 - **Insider Buy/Sells (market):** `api/market/insider-buy-sells`
 - **OI Change:** `api/market/oi-change`
@@ -139,28 +136,21 @@ For authoritative financials (10-K/10-Q line items, restatements, amendments), u
 - **Congress Trader:** `api/congress/congress-trader`
 - **Late Reports:** `api/congress/late-reports`
 - **Politician Recent Trades:** `api/politician-portfolios/recent_trades` — working on our plan
-- **Politicians List:** `api/politician-portfolios/people` — PREMIUM (enterprise only); HTTP 422 `"Missing access for politician ports. This is an enterprise only endpoint."`
-- **Politician Portfolio:** `api/politician-portfolios/{politician_id}` — PREMIUM; HTTP 422
-- **Politician Disclosures:** `api/politician-portfolios/disclosures` — PREMIUM; HTTP 422
-- **Holders by Ticker:** `api/politician-portfolios/holders/{ticker}` — PREMIUM; HTTP 422
 
 ### Insiders
 
 For raw Form 4 filings (as-filed from SEC), use the `sec-api` skill. UW pre-aggregates same-person/same-day/same-code rows and adds market-wide filters, which is more convenient for flow-style queries.
 
-- **Insider Transactions:** `api/insider/transactions`
-- **Insider List (by ticker):** `api/insider/{ticker}`
 - **Ticker Flow:** `api/insider/{ticker}/ticker-flow`
 - **Sector Flow:** `api/insider/{sector}/sector-flow`
 
 ### Institutions
 
-For raw 13F holdings (as-filed from SEC), use the `sec-api` skill. UW's `/institution/{ticker}/ownership` returns pre-aggregated holders, saving a sum-across-all-13Fs step.
+For raw 13F holdings (as-filed from SEC), use the `sec-api` skill.
 
 - **Institutions List:** `api/institutions`
 - **Activity:** `api/institution/{name}/activity/v2`
 - **Sectors:** `api/institution/{name}/sectors`
-- **Ownership (by ticker):** `api/institution/{ticker}/ownership`
 - `{name}` is free-text; prefer the CIK (e.g. `0000102909` for Vanguard) from `/api/institutions`.
 
 ### ETFs
@@ -210,7 +200,6 @@ For raw 13F holdings (as-filed from SEC), use the `sec-api` skill. UW's `/instit
 - **Predictions Smart Money:** `api/predictions/smart-money` — response is nested `data.data[*]`
 - **Predictions Insiders:** `api/predictions/insiders` — response is nested `data.data[*]`; each row has a numeric `asset_id`
 - **Predictions Market:** `api/predictions/market/{asset_id}` — rich market-detail object; `asset_id` is a long numeric string discovered from the four predictions endpoints above
-- **Market Positions:** `api/predictions/market/{asset_id}/positions` — HashDive upstream dependency; consistently returns HTTP 422 `"HashDive API error: 403"` on our plan
 - **Market Liquidity:** `api/predictions/market/{asset_id}/liquidity` — full order book (bids/asks/best_bid/best_ask)
 - **Option Contract Flow:** `api/option-contract/{id}/flow` — `side` is lowercase; stale/expired contract IDs return HTTP 500. Always use fresh IDs from `/api/stock/{ticker}/option-contracts`.
 - **Option Contract Historic:** `api/option-contract/{id}/historic` — response is a flat dict without a `data` wrapper
@@ -317,6 +306,6 @@ for d in data[:10]:
 - Most endpoints silently return `[]` (HTTP 200) on weekend/holiday dates and invalid tickers — cannot distinguish "no data" from "wrong param".
 - Rate limits: 120 req/min, 20000 req/day (resets 8 PM Eastern). Track via response headers `x-uw-req-per-minute-remaining`, `x-uw-daily-req-count`, `x-uw-token-req-limit`.
 - HTTP semantics: `401` = missing/invalid token; `429` = per-minute or daily quota exceeded (body contains `"Approaching daily quota"`); `422` = premium/enterprise-gated endpoints not on our plan (body: `"Missing access for ... enterprise only endpoint"`) OR missing/invalid required params.
-- **Premium endpoints not available on our plan** (always return HTTP 422 — do not call): `stock/{ticker}/ownership`, `politician-portfolios/people`, `politician-portfolios/{politician_id}`, `politician-portfolios/disclosures`, `politician-portfolios/holders/{ticker}`. Of the Congress & Politicians group, only `politician-portfolios/recent_trades` is accessible.
+- **Endpoints not available on our plan** (always return HTTP 422 — do not call): `stock/{ticker}/ownership`, `politician-portfolios/people`, `politician-portfolios/{politician_id}`, `politician-portfolios/disclosures`, `politician-portfolios/holders/{ticker}`, `predictions/market/{asset_id}/positions` (HashDive dependency error). Of the Congress & Politicians group, only `politician-portfolios/recent_trades` is accessible.
 - Boolean filter params (`is_call`, `is_put`, `is_floor`, `is_sweep`, etc.) filter-when-set — leave unset for "no filter".
 - Most endpoints wrap payload in `{data: [...]}`, but some return a top-level JSON list (`stock/flow-recent`, `stock/flow-per-expiry`, `stock/flow-per-strike`) or a flat dict without a `data` key (`etfs/{ticker}/weights`, `shorts/{ticker}/volume-and-ratio`, `option-contract/{id}/historic`). Inspect `type(resp.json())` before calling `.get('data')`. Prediction endpoints (`predictions/unusual`, `whales`, `smart-money`, `insiders`) wrap twice: `data.data[*]`.

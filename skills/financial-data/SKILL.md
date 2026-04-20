@@ -101,18 +101,14 @@ All field values are **floats** unless noted. Timestamps are **int** (Unix epoch
 - `list_inflation_expectations()` -> Iterator[FedInflationExpectations]
 - `list_labor_market_indicators()` -> Iterator[FedLaborMarket]
 
-All economy methods accept date filters: `date=`, `date_gt=`, `date_gte=`, `date_lt=`, `date_lte=`, `limit=`, `sort=`, `order=`.
+All economy methods accept date filters: `date=`, `date_gt=`, `date_gte=`, `date_lt=`, `date_lte=`, `limit=`, `sort=`. Use `sort="date.desc"` to get most-recent-first for all four methods. Note: `order=` is silently ignored — direction must be embedded in the sort value (e.g. `sort="date.desc"`, not `sort="date", order="desc"`).
 
 **TreasuryYield fields:** `date` (str), `yield_1_month`, `yield_3_month`, `yield_6_month`, `yield_1_year`, `yield_2_year`, `yield_3_year`, `yield_5_year`, `yield_7_year`, `yield_10_year`, `yield_20_year`, `yield_30_year`
 
 **FedInflation fields:** `date` (str), `cpi`, `cpi_core`, `cpi_year_over_year`, `pce`, `pce_core`, `pce_spending` -- numeric fields may be `None` for recent/incomplete periods
 
-### Financials (requires higher-tier plan)
+### Financials
 
-- `list_financials_income_statements()` -> Iterator[FinancialIncomeStatement] -- **NOT_AUTHORIZED on current plan**
-- `list_financials_balance_sheets()` -> Iterator[FinancialBalanceSheet] -- **NOT_AUTHORIZED on current plan**
-- `list_financials_cash_flow_statements()` -> Iterator[FinancialCashFlowStatement] -- **NOT_AUTHORIZED on current plan**
-- `list_financials_ratios()` -> Iterator[FinancialRatio] -- **NOT_AUTHORIZED on current plan**
 - `list_stocks_floats()` -> Iterator[FinancialFloat] -- filter with `ticker=`, `limit=`
 
 **FinancialFloat fields:** `ticker` (str), `effective_date` (str), `free_float` (int), `free_float_percent` (float)
@@ -153,20 +149,13 @@ All economy methods accept date filters: `date=`, `date_gt=`, `date_gte=`, `date
 
 **OptionsContract fields:** `ticker` (str, OCC format), `underlying_ticker` (str), `contract_type` (str: "call" or "put"), `expiration_date` (str), `strike_price`, `shares_per_contract`, `exercise_style` (str), `primary_exchange` (str)
 
-**OptionContractSnapshot fields** (from `list_snapshot_options_chain`): `break_even_price`, `implied_volatility` (float, decimal ratio e.g. 0.30 = 30%), `open_interest`, `fair_market_value`, plus nested objects:
+**OptionContractSnapshot fields** (from `list_snapshot_options_chain`): `break_even_price`, `implied_volatility` (float or **`None`**, decimal ratio e.g. 0.30 = 30%), `open_interest`, `fair_market_value`, plus nested objects:
 - `details`: `contract_type` (str: "call"/"put"), `expiration_date` (str), `strike_price`, `ticker` (str), `exercise_style` (str), `shares_per_contract`
 - `greeks`: `delta`, `gamma`, `theta`, `vega` -- **can be `None`** for illiquid/far-OTM contracts or when market is closed. Always check `if c.greeks is not None` before accessing.
 - `day`: `open`, `high`, `low`, `close`, `volume`, `vwap`, `change`, `change_percent`, `previous_close`, `last_updated` (int) -- **can be `None`** when market is closed. Always check `if c.day is not None` before accessing fields.
 - `last_quote`: bid/ask data (may be None when market closed)
 - `last_trade`: last trade data (may be None when market closed)
 - `underlying_asset`: underlying ticker info
-
-### Trades & Quotes (requires higher-tier plan)
-
-- `get_last_trade(ticker)` -> LastTrade -- **NOT_AUTHORIZED on current plan**
-- `list_trades(ticker)` -> Iterator[Trade] -- **NOT_AUTHORIZED on current plan**
-- `get_last_quote(ticker)` -> LastQuote -- **NOT_AUTHORIZED on current plan**
-- `list_quotes(ticker)` -> Iterator[Quote] -- **NOT_AUTHORIZED on current plan**
 
 ### Forex & Crypto
 
@@ -188,14 +177,18 @@ All economy methods accept date filters: `date=`, `date_gt=`, `date_gte=`, `date
 Example helper calls:
 
 ```python
-ratings = list(client.list_benzinga_ratings(limit=50))
-analysts = list(client.list_benzinga_analysts(limit=50))
+import itertools
+# limit= controls page size, not total results -- use islice to bound total fetched
+ratings = list(itertools.islice(client.list_benzinga_ratings(), 50))
+analysts = list(itertools.islice(client.list_benzinga_analysts(), 50))
 ```
 
 ### Blocked categories (NOT_AUTHORIZED on current plan)
 
 The following SDK method groups exist in `massive==2.4.0` but are entirely blocked on the current plan. Do not call these -- they will all throw `BadResponse` with `NOT_AUTHORIZED`.
 
+- **Financials (4 methods):** `list_financials_income_statements`, `list_financials_balance_sheets`, `list_financials_cash_flow_statements`, `list_financials_ratios` -- use `sec-api` skill XBRL endpoint instead
+- **Trades & Quotes (4 methods):** `get_last_trade`, `list_trades`, `get_last_quote`, `list_quotes` -- use `get_previous_close_agg` + `get_aggs` instead
 - **Benzinga (8 methods blocked):** `list_benzinga_analyst_insights`, `list_benzinga_bulls_bears_say`, `list_benzinga_consensus_ratings`, `list_benzinga_earnings`, `list_benzinga_firms`, `list_benzinga_guidance`, `list_benzinga_news`, `list_benzinga_news_v2`
 - **ETF Global (5 methods):** `get_etf_global_analytics`, `get_etf_global_constituents`, `get_etf_global_fund_flows`, `get_etf_global_profiles`, `get_etf_global_taxonomies` -- use `composite_ticker=` param (not `ticker=`)
 - **Futures (9 methods):** `get_futures_snapshot`, `list_futures_aggregates`, `list_futures_contracts`, `list_futures_exchanges`, `list_futures_market_statuses`, `list_futures_products`, `list_futures_quotes`, `list_futures_schedules`, `list_futures_trades`
@@ -238,59 +231,55 @@ for ticker in tickers:
 ### Treasury yields vs inflation (real yield analysis)
 
 ```python
-import os
+import os, itertools
 from massive import RESTClient
 
 proxy_base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/massive-proxy")
 client = RESTClient(api_key=os.environ["OPENROUTER_API_KEY"], base=proxy_base)
 
 # Treasury yields are daily, inflation is monthly -- both have .date (str "YYYY-MM-DD")
-yields = list(client.list_treasury_yields(limit=30, sort="date", order="desc"))
-inflation = list(client.list_inflation(limit=12, sort="date", order="desc"))
+# Use sort="date.desc" to get most-recent-first (order= is silently ignored)
+yields = list(itertools.islice(client.list_treasury_yields(sort="date.desc"), 10))
+inflation = list(itertools.islice(client.list_inflation(sort="date.desc"), 24))
 
-# Latest inflation reading for real yield calc
-latest_cpi_yoy = inflation[0].cpi_year_over_year if inflation else 0
+# Latest non-None cpi_year_over_year (recent months may not yet have it populated)
+latest_cpi_yoy = next((r.cpi_year_over_year for r in inflation if r.cpi_year_over_year is not None), 0)
 
 print(f"Latest CPI YoY: {latest_cpi_yoy:.2f}%")
 print(f"\n{'Date':<12} {'10Y Nominal':>12} {'Real Yield':>11}")
-for y in yields[:10]:
+for y in yields:
     real = y.yield_10_year - latest_cpi_yoy
     print(f"{y.date:<12} {y.yield_10_year:>11.3f}% {real:>10.3f}%")
 ```
 
-### Options chain analysis
+### Options contract pricing (greeks + IV)
 
 ```python
-import os
+import os, itertools
 from datetime import date, timedelta
 from massive import RESTClient
 
 proxy_base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/massive-proxy")
 client = RESTClient(api_key=os.environ["OPENROUTER_API_KEY"], base=proxy_base)
 
-cutoff = str(date.today() + timedelta(days=30))
-chain = list(client.list_snapshot_options_chain("AAPL"))
+# Get near-term ATM contracts for greeks/IV — use islice to avoid fetching entire chain
+expiry_cutoff = str(date.today() + timedelta(days=45))
+contracts = list(itertools.islice(
+    client.list_snapshot_options_chain("AAPL"),
+    100
+))
 
-puts, calls = 0, 0
-volume_by_strike = {}
-
-for c in chain:
-    # Use c.details for contract info, c.day for volume (may be None when market closed)
-    if c.details.expiration_date > cutoff:
+for c in contracts:
+    if c.details.expiration_date > expiry_cutoff:
         continue
-    if c.details.contract_type == "call":
-        calls += 1
-    elif c.details.contract_type == "put":
-        puts += 1
-    strike = c.details.strike_price
-    vol = c.day.volume if c.day is not None else 0
-    volume_by_strike[strike] = volume_by_strike.get(strike, 0) + (vol or 0)
-
-print(f"Put/Call Ratio: {puts/calls:.2f} ({puts} puts / {calls} calls)")
-print("\nTop 10 strikes by volume:")
-for strike, vol in sorted(volume_by_strike.items(), key=lambda x: -x[1])[:10]:
-    print(f"  ${strike}: {vol:,.0f}")
+    if c.greeks is None or c.implied_volatility is None:
+        continue
+    print(f"{c.details.contract_type.upper()} ${c.details.strike_price} exp={c.details.expiration_date} "
+          f"IV={c.implied_volatility:.1%} delta={c.greeks.delta:.3f} theta={c.greeks.theta:.3f}")
 ```
+
+> For put/call ratio, flow by expiry, or volume analytics use the `unusual-whales` skill
+> (`api/stock/{ticker}/options-volume`, `api/stock/{ticker}/volume-oi-per-expiry`).
 
 ## Discovering Methods and Models
 
@@ -340,29 +329,31 @@ for ts in common_ts[-5:]:
 Most `list_*` methods support filter params: `ticker=`, `limit=`, `sort=`, `order=`, date ranges (`date_gt=`, `date_lte=`, etc.).
 
 ```python
-divs = list(client.list_dividends(ticker="AAPL", limit=4))
-news = list(client.list_ticker_news(ticker="AAPL", limit=10))
+import itertools
+divs = list(itertools.islice(client.list_dividends(ticker="AAPL"), 4))
+news = list(itertools.islice(client.list_ticker_news(ticker="AAPL"), 10))
 ```
 
 ### Iterator vs List methods
 
-- `list_*` methods return iterators that auto-paginate -- use with `list()` or `for` loops
+- `list_*` methods return iterators that auto-paginate — never use bare `list()`
 - `get_*` methods return a single object or a list (no pagination)
-- **Always use `limit=`** to avoid unbounded pagination
+- **Always use `itertools.islice(client.list_*(), n)`** to bound total items — `limit=` only controls page size, not total results
 
 ## Critical Gotchas
 
 1. **`get_previous_close_agg` returns a list**, not a single object. Access `[0]` for the result.
 2. **`get_aggs` returns bars in chronological order** (oldest first). The last element is the most recent bar.
 3. **`get_snapshot_ticker` fields can be `None`/zeroed when market is closed.** `last_trade` and `last_quote` will be `None`, `day` OHLCV will be all zeros. Always null-check: `if snap.last_trade is not None:`.
-4. **`get_last_trade`, `get_last_quote`, `list_trades`, `list_quotes` require a higher-tier plan.** They throw `BadResponse` with `NOT_AUTHORIZED`. Use `get_previous_close_agg` + `get_aggs` instead.
-5. **Financials endpoints (`list_financials_*`) require higher-tier plans** -- same `NOT_AUTHORIZED` error. `list_stocks_floats` works on the current plan.
+4. **Trades/quotes and financials methods are blocked** -- see Blocked categories section. Use `get_previous_close_agg` + `get_aggs` for price data; use `sec-api` XBRL for financials.
 6. **Indicator methods return wrapper objects, NOT iterables.** Access `.values` to get the list.
 7. **Parameter names use `tickers` (plural)** for financials methods, not `ticker`. ETF Global methods use `composite_ticker=`, not `ticker=`.
-8. **Rate limits:** add `time.sleep(0.5)` between rapid-fire calls, or use `limit=` to reduce pagination.
+8. **Rate limits:** add `time.sleep(0.5)` between rapid-fire calls.
 9. **`get_grouped_daily_aggs` returns empty for non-trading days** (weekends/holidays) -- no error.
 10. **Crypto tickers** use `X:` prefix (e.g., `X:BTCUSD`), **forex** uses `C:` prefix (e.g., `C:EURUSD`).
 11. **All timestamps are Unix epoch milliseconds (int).** Convert with `datetime.fromtimestamp(ts / 1000)`.
 12. **Economy data frequencies differ:** treasury yields are daily, inflation is monthly. Align dates when combining.
 13. **Options `contract_type` values are lowercase strings:** `"call"` or `"put"`.
 14. **`get_snapshot_crypto_book` is deprecated** (returns 404). Use crypto aggregates instead.
+15. **`limit=` in `list_*` methods is page size, not total results.** The SDK paginates through all pages regardless. Use `itertools.islice(client.list_*(), n)` to bound total items fetched.
+16. **`implied_volatility` on `OptionContractSnapshot` can be `None`** for illiquid contracts. Always check `if c.implied_volatility is not None` before formatting.

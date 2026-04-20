@@ -18,8 +18,9 @@ TOKEN_ENC="$(jq -nr --arg v "${OPENROUTER_API_KEY}" '$v|@uri')"
 QUERY_URL="${PROXY_BASE}?token=${TOKEN_ENC}"
 
 # Examples of other endpoint URLs
-MAPPING_URL="${PROXY_BASE}/mapping?token=${TOKEN_ENC}"
-EXTRACTOR_URL="${PROXY_BASE}/extractor?token=${TOKEN_ENC}"
+# Mapping uses path params: GET /mapping/{type}/{value}?token=...
+MAPPING_URL="${PROXY_BASE}/mapping"  # append /{type}/{value}?token=${TOKEN_ENC}
+EXTRACTOR_URL="${PROXY_BASE}/extractor?token=${TOKEN_ENC}"  # append &url=...&item=...&type=...
 XBRL_URL="${PROXY_BASE}/xbrl-to-json?token=${TOKEN_ENC}"
 ```
 
@@ -27,12 +28,12 @@ XBRL_URL="${PROXY_BASE}/xbrl-to-json?token=${TOKEN_ENC}"
 
 | Form / Dataset | Signal | Cadence | Typical users | Endpoint | Availability |
 | --- | --- | --- | --- | --- | --- |
-| 8-K | Material event between scheduled filings | Event-driven | HF, VC | `POST /` + `POST /extractor` (35 item types) | Supported |
+| 8-K | Material event between scheduled filings | Event-driven | HF, VC | `POST /` + `GET /extractor` (35 item types) | Supported |
 | Form 4 | Insider buy/sell by officers/directors | Within 2 days | HF | `POST /insider-trading` | Supported |
-| 13D | Activist investor crosses 5% with intent | Within 5 business days | HF, VC | `POST /form-13d-13g` + `POST /extractor` | Supported |
-| 10-Q | Quarterly financials, MD&A, risk updates | 3x per year | HF, VC | `POST /` + `POST /extractor` + `GET /xbrl-to-json` | Supported |
+| 13D | Activist investor crosses 5% with intent | Within 5 business days | HF, VC | `POST /form-13d-13g` + `GET /extractor` | Supported |
+| 10-Q | Quarterly financials, MD&A, risk updates | 3x per year | HF, VC | `POST /` + `GET /extractor` + `GET /xbrl-to-json` | Supported |
 | 13F | Institutional holdings ($100M+ AUM) | Quarterly | HF, VC | `POST /form-13f/holdings` + `POST /form-13f/cover-pages` | Supported |
-| 10-K | Annual financials, risks, business overview | Yearly | HF, VC | `POST /` + `POST /extractor` + `GET /xbrl-to-json` | Supported |
+| 10-K | Annual financials, risks, business overview | Yearly | HF, VC | `POST /` + `GET /extractor` + `GET /xbrl-to-json` | Supported |
 | SC TO | Tender offer / buyout offer | Event-driven | HF | `POST /` | Supported |
 | S-1 | IPO registration prospectus | Pre-IPO | HF, VC | `POST /form-s1-424b4` | Supported |
 | 424B | Final prospectus terms | Per offering | HF | `POST /form-s1-424b4` | Supported |
@@ -48,21 +49,21 @@ XBRL_URL="${PROXY_BASE}/xbrl-to-json?token=${TOKEN_ENC}"
 
 Always start from CIK resolution.
 
-1. `POST /mapping`: ticker -> CIK
+1. `GET /mapping/{type}/{value}`: ticker -> CIK (type = `ticker`, `cik`, or `name`)
 2. `POST /`: CIK + form type + date filters -> accession number + filing URLs
-3. `POST /extractor`: filing details URL -> section text
+3. `GET /extractor`: filing details URL -> section text (query params: url, item, type)
 4. `GET /xbrl-to-json`: accession number -> structured statements JSON
 
 ## Core Tool Gotchas
 
-### Mapping (`POST /mapping`)
+### Mapping (`GET /mapping/{type}/{value}`)
 
 - Response is always an array.
 - Prefer ticker lookup over company-name matching.
 - `cusip` can be a space-delimited string.
 - Newly listed companies can lag due to daily update windows.
 
-### Section Extractor (`POST /extractor`)
+### Section Extractor (`GET /extractor`)
 
 - Use `linkToFilingDetails` from Query API, not `linkToHtml`.
 - Section codes are form-specific (`1A`, `part2item1a`, `2-2`).
@@ -120,12 +121,16 @@ One endpoint for both registration and final prospectus retrieval.
 
 - `year` filters are integer-based.
 - Position titles are free-form text and not normalized.
+- **`/compensation` returns a flat JSON array**, not `{total, data}`. Iterate directly over the response.
+- **`/directors-and-board-members` nests director records** under `data[*].directors[*]` — not top-level fields on the filing object.
 
 ### N-PORT (`POST /form-nport`), Form 144 (`POST /form-144`), Form D (`POST /form-d`)
 
 - N-PORT is monthly fund holdings.
 - Form 144 is proposed pre-sale notice data.
 - Form D has no ticker; search by entity metadata.
+- **N-PORT: use `filedAt` date range for filtering** — `periodOfReport` returns 0 results. Example: `"filedAt:[2024-01-01 TO 2024-12-31]"`.
+- **Form D response uses `offerings` key**, not `data`. Access results as `response["offerings"]`.
 
 ## Example: CIK -> latest 10-K -> Risk Factors + XBRL
 
@@ -136,9 +141,8 @@ PROXY_BASE="${OPENROUTER_BASE_URL%/api/llm-proxy}/api/sec-proxy"
 TOKEN_ENC="$(jq -nr --arg v "${OPENROUTER_API_KEY}" '$v|@uri')"
 
 # 1) ticker -> CIK
-CIK="$(curl -sS -X POST "${PROXY_BASE}/mapping?token=${TOKEN_ENC}" \
-  -H 'Content-Type: application/json' \
-  -d '{"query":"ticker:AAPL"}' | jq -r '.[0].cik | tonumber')"
+CIK="$(curl -sS "${PROXY_BASE}/mapping/ticker/AAPL?token=${TOKEN_ENC}" \
+  | jq -r '.[0].cik | tonumber')"
 
 # 2) latest 10-K
 FILING_JSON="$(curl -sS -X POST "${PROXY_BASE}?token=${TOKEN_ENC}" \
@@ -149,9 +153,8 @@ DETAILS_URL="$(jq -r '.filings[0].linkToFilingDetails' <<<"${FILING_JSON}")"
 ACCESSION_NO="$(jq -r '.filings[0].accessionNo' <<<"${FILING_JSON}")"
 
 # 3) 10-K Item 1A risk factors
-RISK_TEXT="$(curl -sS -X POST "${PROXY_BASE}/extractor?token=${TOKEN_ENC}" \
-  -H 'Content-Type: application/json' \
-  -d "{\"url\":\"${DETAILS_URL}\",\"item\":\"1A\",\"type\":\"text\"}")"
+DETAILS_URL_ENC="$(jq -nr --arg v "${DETAILS_URL}" '$v|@uri')"
+RISK_TEXT="$(curl -sS "${PROXY_BASE}/extractor?token=${TOKEN_ENC}&url=${DETAILS_URL_ENC}&item=1A&type=text")"
 
 # 4) structured statements
 XBRL_JSON="$(curl -sS "${PROXY_BASE}/xbrl-to-json?token=${TOKEN_ENC}&accession-no=${ACCESSION_NO}")"
