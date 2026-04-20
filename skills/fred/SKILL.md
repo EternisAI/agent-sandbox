@@ -22,7 +22,7 @@ token = os.environ["OPENROUTER_API_KEY"]
 def fred_proxy_get(path: str, params: dict | None = None) -> dict:
     query = urllib.parse.urlencode({"file_type": "json", **(params or {})})
     url = f"{base.rstrip('/')}/{path.lstrip('/')}?{query}"
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "User-Agent": "opencode-fred-client/1.0"})
     with urllib.request.urlopen(req, timeout=20) as resp:
         return json.loads(resp.read().decode())
 ```
