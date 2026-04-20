@@ -159,9 +159,9 @@ All economy methods accept date filters: `date=`, `date_gt=`, `date_gte=`, `date
 
 ### Forex & Crypto
 
-- `get_last_forex_quote(from_, to)` -> LastForexQuote
-- `get_real_time_currency_conversion(from_, to)` -> RealTimeCurrencyConversion
-- `get_last_crypto_trade(from_, to)` -> CryptoTrade
+- `get_last_forex_quote(from_, to)` -> LastForexQuote -- `symbol` (str), `last` (ForexQuote: `ask`, `bid`, `exchange`, `timestamp`)
+- `get_real_time_currency_conversion(from_, to)` -> RealTimeCurrencyConversion -- `converted` (float), `from_` (str), `to` (str), `initial_amount` (float), `last` (ForexQuote)
+- `get_last_crypto_trade(from_, to)` -> CryptoTrade -- `price` (float), `size` (float), `timestamp` (int), `exchange` (int), `conditions` (List[int])
 - Crypto/forex aggregates: use `get_aggs("X:BTCUSD", ...)` or `get_aggs("C:EURUSD", ...)`
 
 ### Other
