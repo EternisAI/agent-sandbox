@@ -145,7 +145,13 @@ def get_cot_disaggregated(date_from: str, sector: str | None = None, contract: s
     return _cftc_get("disaggregated", {"$where": where, "$order": "report_date_as_yyyy_mm_dd DESC", "$limit": limit})
 
 def summarize_cot_tff(rows: list) -> list:
-    """Compute net positioning, weekly delta, and % OI from raw TFF rows."""
+    """Compute net positioning for all three trader categories from raw TFF rows.
+
+    Three categories:
+    - lev_fund  : leveraged funds (HFs + CTAs) — primary signal
+    - asset_mgr : asset managers (real money / institutional) — flow signal
+    - dealer    : dealers/banks — contra-indicator (they take the other side of HF trades)
+    """
     out = []
     for r in rows:
         lev_long  = int(r.get("lev_money_positions_long", 0) or 0)
@@ -154,36 +160,69 @@ def summarize_cot_tff(rows: list) -> list:
         d_short   = int(r.get("change_in_lev_money_short", 0) or 0)
         am_long   = int(r.get("asset_mgr_positions_long", 0) or 0)
         am_short  = int(r.get("asset_mgr_positions_short", 0) or 0)
+        am_d_long = int(r.get("change_in_asset_mgr_long", 0) or 0)
+        am_d_short= int(r.get("change_in_asset_mgr_short", 0) or 0)
+        dl_long   = int(r.get("dealer_positions_long_all", 0) or 0)
+        dl_short  = int(r.get("dealer_positions_short_all", 0) or 0)
+        dl_d_long = int(r.get("change_in_dealer_long_all", 0) or 0)
+        dl_d_short= int(r.get("change_in_dealer_short_all", 0) or 0)
         out.append({
-            "date":          r["report_date_as_yyyy_mm_dd"][:10],
-            "contract":      r["market_and_exchange_names"],
-            "net_lev_fund":  lev_long - lev_short,
-            "lev_long":      lev_long,
-            "lev_short":     lev_short,
-            "lev_delta":     d_long - d_short,
-            "pct_oi_lev_long": float(r.get("pct_of_oi_lev_money_long", 0) or 0),
-            "asset_mgr_net": am_long - am_short,
-            "open_interest": int(r.get("open_interest_all", 0) or 0),
+            "date":              r["report_date_as_yyyy_mm_dd"][:10],
+            "contract":          r["market_and_exchange_names"],
+            "open_interest":     int(r.get("open_interest_all", 0) or 0),
+            # Leveraged funds (HF/CTA) — primary signal
+            "net_lev_fund":      lev_long - lev_short,
+            "lev_long":          lev_long,
+            "lev_short":         lev_short,
+            "lev_delta":         d_long - d_short,
+            "pct_oi_lev_long":   float(r.get("pct_of_oi_lev_money_long", 0) or 0),
+            # Asset managers (real money) — flow signal
+            "asset_mgr_net":     am_long - am_short,
+            "asset_mgr_delta":   am_d_long - am_d_short,
+            "pct_oi_asset_mgr_long": float(r.get("pct_of_oi_asset_mgr_long", 0) or 0),
+            # Dealers (banks) — contra-indicator; typically net short vs HF longs
+            "dealer_net":        dl_long - dl_short,
+            "dealer_delta":      dl_d_long - dl_d_short,
+            "pct_oi_dealer_short": float(r.get("pct_of_oi_dealer_short_all", 0) or 0),
         })
     return out
 
 def summarize_cot_disaggregated(rows: list) -> list:
-    """Compute net positioning, weekly delta, and % OI from raw Disaggregated rows."""
+    """Compute net positioning for all trader categories from raw Disaggregated rows.
+
+    Three categories:
+    - managed_money : funds/CTAs — primary signal
+    - swap_dealer   : swap dealers/banks — contra-indicator
+    - producer      : producers/merchants (hedgers) — commercial hedging signal
+    """
     out = []
     for r in rows:
-        mm_long  = int(r.get("m_money_positions_long_all", 0) or 0)
-        mm_short = int(r.get("m_money_positions_short_all", 0) or 0)
-        d_long   = int(r.get("change_in_m_money_long_all", 0) or 0)
-        d_short  = int(r.get("change_in_m_money_short_all", 0) or 0)
+        mm_long   = int(r.get("m_money_positions_long_all", 0) or 0)
+        mm_short  = int(r.get("m_money_positions_short_all", 0) or 0)
+        d_long    = int(r.get("change_in_m_money_long_all", 0) or 0)
+        d_short   = int(r.get("change_in_m_money_short_all", 0) or 0)
+        # swap dealer — NOTE: short field has double underscore (CFTC data bug)
+        sd_long   = int(r.get("swap_positions_long_all", 0) or 0)
+        sd_short  = int(r.get("swap__positions_short_all", 0) or 0)  # double underscore
+        sd_d_long = int(r.get("change_in_swap_long_all", 0) or 0)
+        sd_d_short= int(r.get("change_in_swap_short_all", 0) or 0)
+        pm_long   = int(r.get("prod_merc_positions_long", 0) or 0)
+        pm_short  = int(r.get("prod_merc_positions_short", 0) or 0)
         out.append({
-            "date":           r["report_date_as_yyyy_mm_dd"][:10],
-            "contract":       r["market_and_exchange_names"],
-            "net_mm":         mm_long - mm_short,
-            "mm_long":        mm_long,
-            "mm_short":       mm_short,
-            "mm_delta":       d_long - d_short,
-            "pct_oi_mm_long": float(r.get("pct_of_oi_m_money_long_all", 0) or 0),
-            "open_interest":  int(r.get("open_interest_all", 0) or 0),
+            "date":              r["report_date_as_yyyy_mm_dd"][:10],
+            "contract":          r["market_and_exchange_names"],
+            "open_interest":     int(r.get("open_interest_all", 0) or 0),
+            # Managed money (funds/CTAs) — primary signal
+            "net_mm":            mm_long - mm_short,
+            "mm_long":           mm_long,
+            "mm_short":          mm_short,
+            "mm_delta":          d_long - d_short,
+            "pct_oi_mm_long":    float(r.get("pct_of_oi_m_money_long_all", 0) or 0),
+            # Swap dealer — contra-indicator
+            "swap_dealer_net":   sd_long - sd_short,
+            "swap_dealer_delta": sd_d_long - sd_d_short,
+            # Producer/merchant (hedgers) — commercial hedging signal
+            "producer_net":      pm_long - pm_short,
         })
     return out
 
@@ -217,5 +256,9 @@ for s in summary:
 - **`$order` is required** — without `$order=report_date_as_yyyy_mm_dd DESC`, row order is undefined.
 - **`$limit` default is 1,000** — always set explicitly. For full sector pulls use `$limit=50000`.
 - **`pct_of_oi_*` for cross-contract comparison** — raw counts vary by contract size.
-- **`swap__positions_short_all`** (Disaggregated) has a double underscore — CFTC data bug. Avoid accessing swap dealer shorts directly.
+- **`swap__positions_short_all`** (Disaggregated) has a double underscore — CFTC data bug. `swap_positions_long_all` (single) vs `swap__positions_short_all` (double). `summarize_cot_disaggregated` handles this correctly — do not access raw swap short fields manually.
+- **Dealers are a contra-indicator** — they take the other side of HF trades. A large negative `dealer_net` in TFF means dealers sold to HFs who are long; it confirms crowding, not a bullish signal.
+- **TFF dealer fields use `_all` suffix** — `dealer_positions_long_all`, `dealer_positions_short_all`. Unlike leveraged fund fields which have no `_all` suffix.
+- **Disaggregated `prod_merc_positions_long/short` have no `_all` suffix** — inconsistent with other Disaggregated fields. Use exactly as shown in `summarize_cot_disaggregated`.
+- **`change_in_swap_short_all`** (Disaggregated delta) uses single underscore — only the position field has the double underscore bug, not the change field.
 - Process data in Python, print summaries — keep model context small.
