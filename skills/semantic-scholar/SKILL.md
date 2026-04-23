@@ -40,14 +40,14 @@ def s2_get(path: str, params: dict | None = None) -> dict:
     url = f"{BASE}/{path.lstrip('/')}"
     if params:
         url += "?" + urllib.parse.urlencode(params)
-    return _do(urllib.request.Request(url))
+    return _do(urllib.request.Request(url, headers={"User-Agent": "axion-s2-client/1.0"}))
 
 def s2_post(path: str, body: dict, params: dict | None = None) -> dict:
     url = f"{BASE}/{path.lstrip('/')}"
     if params:
         url += "?" + urllib.parse.urlencode(params)
     data = json.dumps(body).encode()
-    return _do(urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}))
+    return _do(urllib.request.Request(url, data=data, headers={"Content-Type": "application/json", "User-Agent": "axion-s2-client/1.0"}))
 ```
 
 ## Supported Tools
@@ -113,7 +113,7 @@ def _do(req, max_attempts=5):
 def s2_get(path, params=None):
     url = f"{BASE}/{path.lstrip('/')}"
     if params: url += "?" + urllib.parse.urlencode(params)
-    return _do(urllib.request.Request(url))
+    return _do(urllib.request.Request(url, headers={"User-Agent": "axion-s2-client/1.0"}))
 
 # Boolean query — no result cap, sorted by citation count
 r = s2_get("/graph/v1/paper/search/bulk", {
@@ -150,7 +150,7 @@ def _do(req, max_attempts=5):
 def s2_get(path, params=None):
     url = f"{BASE}/{path.lstrip('/')}"
     if params: url += "?" + urllib.parse.urlencode(params)
-    return _do(urllib.request.Request(url))
+    return _do(urllib.request.Request(url, headers={"User-Agent": "axion-s2-client/1.0"}))
 
 paper_id = "ARXIV:1706.03762"
 
@@ -193,7 +193,7 @@ def _do(req, max_attempts=5):
 def s2_get(path, params=None):
     url = f"{BASE}/{path.lstrip('/')}"
     if params: url += "?" + urllib.parse.urlencode(params)
-    return _do(urllib.request.Request(url))
+    return _do(urllib.request.Request(url, headers={"User-Agent": "axion-s2-client/1.0"}))
 
 # Step 1: resolve name -> authorId
 candidates = s2_get("/graph/v1/author/search", {
@@ -240,7 +240,7 @@ def s2_post(path, body, params=None):
     url = f"{BASE}/{path.lstrip('/')}"
     if params: url += "?" + urllib.parse.urlencode(params)
     data = json.dumps(body).encode()
-    return _do(urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}))
+    return _do(urllib.request.Request(url, data=data, headers={"Content-Type": "application/json", "User-Agent": "axion-s2-client/1.0"}))
 
 # Up to 500 papers — fields as query param, ids in body
 papers = s2_post(
@@ -281,7 +281,7 @@ def s2_post(path, body, params=None):
     url = f"{BASE}/{path.lstrip('/')}"
     if params: url += "?" + urllib.parse.urlencode(params)
     data = json.dumps(body).encode()
-    return _do(urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}))
+    return _do(urllib.request.Request(url, data=data, headers={"Content-Type": "application/json", "User-Agent": "axion-s2-client/1.0"}))
 
 # positivePaperIds/negativePaperIds must be S2 SHA IDs — ARXIV: prefix not accepted here
 # fields and limit go in query params, not the body
