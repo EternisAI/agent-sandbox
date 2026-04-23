@@ -90,7 +90,7 @@ All endpoints are `GET` only. Every path below is relative to the proxy base (e.
 - **IV Rank:** `api/stock/{ticker}/iv-rank`
 - **IV Term Structure:** `api/stock/{ticker}/volatility/term-structure`
 - **Historical Risk Reversal Skew:** `api/stock/{ticker}/historical-risk-reversal-skew` — SPY/QQQ/IWM only
-- **Max Pain:** `api/stock/{ticker}/max-pain`
+- **Max Pain:** `api/stock/{ticker}/max-pain` — Response: `data[*]`. Fields: `expiry`, `max_pain`, `call_oi`, `put_oi`, `call_notional`, `put_notional`.
 - **NOPE:** `api/stock/{ticker}/nope`
 - **OI Change:** `api/stock/{ticker}/oi-change`
 - **OI per Expiry:** `api/stock/{ticker}/oi-per-expiry`
@@ -105,7 +105,7 @@ For authoritative financials (10-K/10-Q line items, restatements, amendments), u
 - **Earnings History:** `api/stock/{ticker}/earnings` — Params: `report_type`. Reported/estimated EPS, surprise, pre/post market timing.
 - **Financial Earnings:** `api/stock/{ticker}/financials` — EPS vs estimates + surprise history. Response: `data.earnings[*]`. Fields: `report_date`, `report_type`, `fiscal_date_ending`, `report_time`, `reported_eps`, `estimated_eps`, `surprise`, `surprise_percentage`. Upcoming events have `reported_eps=None`.
 - **Fundamental Breakdown:** `api/stock/{ticker}/fundamental-breakdown` — revenue-by-product / geography segments + RSU data (UW-specific pre-aggregation)
-- **Insider Buy/Sells:** `api/stock/{ticker}/insider-buy-sells`
+- **Insider Buy/Sells:** `api/stock/{ticker}/insider-buy-sells` — Response: `data[*]`. Aggregated by `filing_date` (not individual transactions). Fields: `filing_date`, `purchases`, `sells`, `notional`.
 - **ATM Chains:** `api/stock/{ticker}/atm-chains` — `expirations[]` is effectively required; empty list returns HTTP 422
 
 ### Dark Pool

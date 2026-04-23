@@ -23,8 +23,8 @@ def cl_get(path: str, params: dict | None = None) -> dict:
     url = f"{base.rstrip('/')}/{path.lstrip('/')}"
     if params:
         url += "?" + urllib.parse.urlencode(params)
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
-    with urllib.request.urlopen(req, timeout=20) as r:
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "User-Agent": "curl/7.88.1"})
+    with urllib.request.urlopen(req, timeout=60) as r:
         return json.loads(r.read().decode())
 ```
 
@@ -72,8 +72,8 @@ def cl_get(path, params=None):
     url = f"{base.rstrip('/')}/{path.lstrip('/')}"
     if params:
         url += "?" + urllib.parse.urlencode(params)
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
-    with urllib.request.urlopen(req, timeout=20) as r:
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "User-Agent": "curl/7.88.1"})
+    with urllib.request.urlopen(req, timeout=60) as r:
         return json.loads(r.read().decode())
 
 company = "Tesla Inc"
@@ -95,8 +95,8 @@ def cl_get(path, params=None):
     url = f"{base.rstrip('/')}/{path.lstrip('/')}"
     if params:
         url += "?" + urllib.parse.urlencode(params)
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
-    with urllib.request.urlopen(req, timeout=20) as r:
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "User-Agent": "curl/7.88.1"})
+    with urllib.request.urlopen(req, timeout=60) as r:
         return json.loads(r.read().decode())
 
 results = cl_get("/search/", {"type": "rd", "q": "Tesla securities fraud", "page_size": 5})
@@ -119,8 +119,8 @@ def cl_get(path, params=None):
     url = f"{base.rstrip('/')}/{path.lstrip('/')}"
     if params:
         url += "?" + urllib.parse.urlencode(params)
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
-    with urllib.request.urlopen(req, timeout=20) as r:
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "User-Agent": "curl/7.88.1"})
+    with urllib.request.urlopen(req, timeout=60) as r:
         return json.loads(r.read().decode())
 
 docket_id = 67687667  # from search results
