@@ -305,6 +305,7 @@ for p in r.get("recommendedPapers", []):
 - `corpusId` (integer) is the stable ID for persistent storage — prefer over `paperId` (SHA).
 - `abstract` may be null — Springer journals block abstract delivery.
 - Bulk search uses token pagination only — pass `token` from response back as query param. `null` token = end of results.
+- `search_papers_bulk` is the heaviest endpoint — it saturates the shared pool more than any other call. Always add a delay (≥10s) before the next request after a bulk search to avoid exhausting all retry attempts.
 - **Batch and recommendations POST endpoints:** `fields` and `limit` must be query params, not in the request body. Body takes only `ids` / `positivePaperIds` / `negativePaperIds`.
 - **Recommendations:** only accepts S2 SHA IDs — `ARXIV:` and other prefixes return 400.
 - Author `affiliations` is self-reported — may be stale.
