@@ -6,29 +6,25 @@ allowed-tools: Bash(python3 -c *), Bash(python3 - *), Bash(python3 *)
 
 # Hugging Face Papers API
 
-Call the HF API directly using `HUGGINGFACE_API_KEY` for authentication.
-
-**Base URL:** `https://huggingface.co`
-
-## Helper Functions
+## Authentication
 
 ```python
-import urllib.error
 import urllib.parse
 import urllib.request
 import json
 import os
 
-BASE = "https://huggingface.co"
+base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/hf-proxy")
+token = os.environ["OPENROUTER_API_KEY"]
 
 def hf_get(path: str, params: dict | None = None) -> dict | list:
-    token = os.environ.get("HUGGINGFACE_API_KEY")
-    if not token:
-        raise ValueError("HUGGINGFACE_API_KEY not found in environment")
-    url = f"{BASE}/{path.lstrip('/')}"
+    url = f"{base.rstrip('/')}/{path.lstrip('/')}"
     if params:
         url += "?" + urllib.parse.urlencode(params)
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    req = urllib.request.Request(url, headers={
+        "Authorization": f"Bearer {token}",
+        "User-Agent": "axion-hf-client/1.0",
+    })
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.loads(r.read().decode())
 ```
@@ -72,14 +68,14 @@ submittedBy.name    → curator name — credibility signal (daily feed only)
 ```python
 import urllib.parse, urllib.request, json, os
 
-BASE = "https://huggingface.co"
+base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/hf-proxy")
+token = os.environ["OPENROUTER_API_KEY"]
 
 def hf_get(path, params=None):
-    token = os.environ["HUGGINGFACE_API_KEY"]
-    url = f"{BASE}/{path.lstrip('/')}"
+    url = f"{base.rstrip('/')}/{path.lstrip('/')}"
     if params:
         url += "?" + urllib.parse.urlencode(params)
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "User-Agent": "axion-hf-client/1.0"})
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.loads(r.read().decode())
 
@@ -98,14 +94,14 @@ for item in papers:
 ```python
 import urllib.parse, urllib.request, json, os
 
-BASE = "https://huggingface.co"
+base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/hf-proxy")
+token = os.environ["OPENROUTER_API_KEY"]
 
 def hf_get(path, params=None):
-    token = os.environ["HUGGINGFACE_API_KEY"]
-    url = f"{BASE}/{path.lstrip('/')}"
+    url = f"{base.rstrip('/')}/{path.lstrip('/')}"
     if params:
         url += "?" + urllib.parse.urlencode(params)
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "User-Agent": "axion-hf-client/1.0"})
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.loads(r.read().decode())
 
@@ -127,14 +123,14 @@ print(f"Authors: {', '.join(authors[:5])}")
 ```python
 import urllib.parse, urllib.request, json, os
 
-BASE = "https://huggingface.co"
+base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/hf-proxy")
+token = os.environ["OPENROUTER_API_KEY"]
 
 def hf_get(path, params=None):
-    token = os.environ["HUGGINGFACE_API_KEY"]
-    url = f"{BASE}/{path.lstrip('/')}"
+    url = f"{base.rstrip('/')}/{path.lstrip('/')}"
     if params:
         url += "?" + urllib.parse.urlencode(params)
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "User-Agent": "axion-hf-client/1.0"})
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.loads(r.read().decode())
 
@@ -152,14 +148,14 @@ for item in results:
 ```python
 import urllib.parse, urllib.request, json, os
 
-BASE = "https://huggingface.co"
+base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/hf-proxy")
+token = os.environ["OPENROUTER_API_KEY"]
 
 def hf_get(path, params=None):
-    token = os.environ["HUGGINGFACE_API_KEY"]
-    url = f"{BASE}/{path.lstrip('/')}"
+    url = f"{base.rstrip('/')}/{path.lstrip('/')}"
     if params:
         url += "?" + urllib.parse.urlencode(params)
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "User-Agent": "axion-hf-client/1.0"})
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.loads(r.read().decode())
 
