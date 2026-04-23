@@ -33,15 +33,15 @@ def hf_get(path: str, params: dict | None = None) -> dict | list:
 
 | Tool | Endpoint | What it returns |
 | --- | --- | --- |
-| `get_daily_papers` | `GET /api/daily_papers` | Community-curated papers with upvotes for a given date |
+| `get_daily_papers` | `GET /api/daily_papers` | Community-curated papers with upvotes — single date, ISO week, or month |
 | `get_paper_details` | `GET /api/papers/{paper_id}` | Full metadata for any HF-indexed paper by arXiv ID |
 | `search_hf_papers` | `GET /api/papers/search` | Semantic search across all HF-indexed papers |
 
 ## Call Graph
 
 ```
-1. get_daily_papers    date / sort       → paper list (github/project data included when present)
-   search_hf_papers    query             → paper list across full HF corpus
+1. get_daily_papers    date / week / month / sort  → paper list (github/project data included when present)
+   search_hf_papers    query                       → paper list across full HF corpus (no date filter)
 
 2. get_paper_details   arxiv_id          → single paper deep-dive; use for direct arXiv ID lookups
 ```
@@ -168,6 +168,35 @@ else:
         print(f"[{p['upvotes']}↑] {p['id']} — {p['title']}")
 ```
 
+### Papers for a Week or Month
+
+```python
+import urllib.parse, urllib.request, json, os
+
+base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/hf-proxy")
+token = os.environ["OPENROUTER_API_KEY"]
+
+def hf_get(path, params=None):
+    url = f"{base.rstrip('/')}/{path.lstrip('/')}"
+    if params:
+        url += "?" + urllib.parse.urlencode(params)
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "User-Agent": "axion-hf-client/1.0"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read().decode())
+
+# ISO week — covers Mon–Fri of that week
+papers = hf_get("/api/daily_papers", {"week": "2026-W15", "limit": 50, "sort": "trending"})
+
+# Full month
+# papers = hf_get("/api/daily_papers", {"month": "2026-03", "limit": 100, "sort": "trending"})
+
+for item in sorted(papers, key=lambda x: x["paper"]["upvotes"], reverse=True)[:10]:
+    p = item["paper"]
+    print(f"[{p['upvotes']}↑] {p['title']}")
+```
+
+`week` uses ISO 8601 format (`YYYY-Www`). `month` uses `YYYY-MM`. Both respect `sort` and `limit`. Future weeks/months return empty lists.
+
 ## Gotchas
 
 - **Weekdays only** — weekend dates return an empty list, not an error. Check the day before retrying.
@@ -178,13 +207,15 @@ else:
 - **`ai_summary` over `summary`** — AI summary is more useful than the raw abstract for downstream consumption.
 - **`githubStars` is a snapshot** — cached at HF submission time, may be stale.
 - **`projectPage` is a strong signal** — only papers with active demos fill this field. Rare = productization signal.
+- **`search_hf_papers` has no date filter** — only `q` and `limit` are supported. Use `get_daily_papers` with `week` or `month` to scope by time.
 - **HF corpus only for search** — not all arXiv papers are indexed. Coverage is strong for ML/AI. For full academic coverage use Semantic Scholar.
 - **Call `get_daily_papers` once per conversation** — returns up to 100 papers per call; no need to repeat.
 - **HTTP 429 has no `Retry-After`** — use exponential backoff: `min(2^attempt, 60)` seconds.
 
 ## Usage Rules
 
-- Use `get_daily_papers` for recency/trending; use `search_hf_papers` when the user has a topic.
+- Use `get_daily_papers` for recency/trending; pass `week` or `month` for broader time ranges instead of looping over dates.
+- Use `search_hf_papers` when the user has a topic query; combine with `get_daily_papers` (week/month) if date scope is also needed.
 - Always null-check `githubRepo`, `githubStars`, and `projectPage` before using.
 - Use `ai_summary` and `ai_keywords` for triage — faster and cleaner than raw abstracts.
 - For direct arXiv ID lookups or deep-dives, use `get_paper_details` — it covers the full HF corpus, not just the daily feed.
