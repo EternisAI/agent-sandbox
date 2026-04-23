@@ -1,6 +1,6 @@
 ---
 name: finnhub
-description: Fetch EPS/revenue estimates, analyst recommendations, upgrades/downgrades, price targets, earnings/IPO calendars, fundamental metrics, insider sentiment (MSPR), social sentiment, lobbying data, and USA spending via the Finnhub Python SDK through the backend proxy.
+description: Fetch EPS/revenue estimates, analyst recommendations, upgrades/downgrades, price targets, earnings/IPO calendars, fundamental metrics, insider sentiment (MSPR), social sentiment, lobbying, USA spending, USPTO patents, and H1B visa applications via the Finnhub Python SDK through the backend proxy. Most endpoints require a stock ticker (public companies only); exceptions are ipo_calendar and earnings_calendar.
 allowed-tools: Bash(python3 -c *), Bash(python3 - *), Bash(python3 *)
 ---
 
@@ -25,7 +25,7 @@ The SDK sends `token=` as a query param automatically. Override `client.API_URL`
 
 ## Supported Endpoints
 
-Only use these 12 functions in this skill:
+Only use these 14 functions in this skill:
 
 | Function | SDK method | API path | Signal | Cadence |
 | --- | --- | --- | --- | --- |
@@ -41,6 +41,8 @@ Only use these 12 functions in this skill:
 | Social Sentiment | `stock_social_sentiment` | `/stock/social-sentiment` | Reddit + Twitter mention counts and scores | Daily |
 | Lobbying | `stock_lobbying` | `/stock/lobbying` | Senate lobbying spend and issues by company | Quarterly |
 | USA Spending | `stock_usa_spending` | `/stock/usa-spending` | Federal contracts and government awards | Event-driven |
+| USPTO Patents | `stock_uspto_patent` | `/stock/uspto-patent` | Patent filings — R&D activity and innovation pipeline | Event-driven |
+| H1B Visa Applications | `stock_visa_application` | `/stock/visa-application` | H1B + PERM LCA filings — hiring composition and wage data | Quarterly |
 
 ## Method Signatures
 
@@ -57,6 +59,8 @@ client.stock_insider_sentiment(symbol, _from, to)
 client.stock_social_sentiment(symbol, _from=None, to=None)
 client.stock_lobbying(symbol, _from, to)
 client.stock_usa_spending(symbol, _from, to)
+client.stock_uspto_patent(symbol, _from, to)       # hard cap: 250 records/call — use ≤3 month windows for prolific filers
+client.stock_visa_application(symbol, _from, to)
 ```
 
 ## Response Fields
@@ -243,6 +247,44 @@ Pass `metric="all"` to get all 132 available fields.
 }
 ```
 
+### USPTO Patents (`stock_uspto_patent`)
+
+> **⚠️ 250-record hard cap per call.** Prolific filers (AAPL, NVDA, MSFT, GOOG) exceed this within a single quarter. Use ≤3 month date windows and check `len(data) == 250` to detect truncation — paginate by shrinking the date range if so.
+
+```json
+{
+  "data": [
+    {
+      "applicationNumber": "18162938", "patentNumber": "US20240259233A1",
+      "description": "SLIM ETHERNET COMMUNICATION OVER INFINIBAND",
+      "filingDate": "2023-02-01 00:00:00", "filingStatus": "Application",
+      "patentType": "Utility", "companyFilingName": ["NVIDIA CORPORATION"], "url": ""
+    }
+  ],
+  "symbol": "NVDA"
+}
+```
+
+`filingStatus`: `"Application"`, `"Granted"`. `patentType`: `"Utility"`, `"Design"`, `"Plant"`. `url` may be empty.
+
+### H1B Visa Applications (`stock_visa_application`)
+
+```json
+{
+  "data": [
+    {
+      "symbol": "AAPL", "jobTitle": "Engineering Project Manager",
+      "caseStatus": "Certified", "visaClass": "H-1B", "wageLevel": "III",
+      "wageRangeFrom": 188000, "wageRangeTo": 282500, "wageUnitOfPay": "Year",
+      "worksiteCity": "Sunnyvale", "worksiteState": "CA", "year": 2023, "quarter": 3
+    }
+  ],
+  "symbol": "AAPL"
+}
+```
+
+`caseStatus`: `"Certified"`, `"Denied"`, `"Withdrawn"`. `wageLevel`: `"I"`–`"IV"` (I = entry, IV = fully competent).
+
 ## Examples
 
 ### Pre-Earnings Preview (EPS + Revenue Estimates)
@@ -375,6 +417,34 @@ print(f"Dividend yield: {m.get('dividendYieldIndicatedAnnual'):.2f}%")
 print(f"ROE (TTM): {m.get('roeTTM'):.2f}%")
 ```
 
+### USPTO Patents + H1B Visa Applications
+
+```python
+import os
+import finnhub
+
+proxy_base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/finnhub-proxy")
+client = finnhub.Client(api_key=os.environ["OPENROUTER_API_KEY"])
+client.API_URL = proxy_base.rstrip("/")
+
+symbol = "NVDA"
+
+# USPTO patents — use tight date window to avoid 250-record cap
+patents = client.stock_uspto_patent(symbol, _from="2023-01-01", to="2023-03-31")
+data = patents.get("data", [])
+truncated = len(data) == 250
+print(f"{len(data)} patents{'  (truncated — narrow date range)' if truncated else ''}")
+for p in data[:5]:
+    print(f"  [{p['filingDate'][:10]}] {p['description'][:70]} ({p['filingStatus']})")
+
+# H1B filings
+visas = client.stock_visa_application(symbol, _from="2023-01-01", to="2023-12-31")
+filings = visas.get("data", [])
+print(f"\n{len(filings)} H1B filings")
+for v in filings[:5]:
+    print(f"  {v['jobTitle']} — {v['caseStatus']} ${v['wageRangeFrom']:,.0f}–${v['wageRangeTo']:,.0f} L{v['wageLevel']} ({v['worksiteCity']}, {v['worksiteState']})")
+```
+
 ### Lobbying + USA Spending
 
 ```python
@@ -404,3 +474,4 @@ for d in spend.get("data", [])[:5]:
 - Rate limit: 30 calls/sec max. Add `time.sleep(0.1)` between rapid calls.
 - The `freq` param for estimates accepts `"quarterly"` or `"annual"`.
 - `earnings_calendar` with `symbol=""` returns all tickers (1500+) — always pass a specific `symbol` unless you need the full market calendar.
+- `stock_uspto_patent` hard cap is 250 records/call — use ≤3 month windows for large-cap tech companies and check `len(data) == 250` to detect truncation.

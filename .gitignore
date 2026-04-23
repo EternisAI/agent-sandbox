@@ -3,3 +3,4 @@ docs/
 .env
 .env.*
 temp_scripts/
+plans/
