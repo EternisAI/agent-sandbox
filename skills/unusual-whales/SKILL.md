@@ -14,8 +14,8 @@ Use `httpx` to query the Unusual Whales API through the backend proxy. Do not us
 import os
 import httpx
 
-proxy_base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/unusual-whale-proxy")
-api_key = os.environ["OPENROUTER_API_KEY"]
+proxy_base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/unusual-whale-proxy")
+api_key = os.environ["PROXY_API_KEY"]
 
 headers = {
     "Authorization": f"Bearer {api_key}",
@@ -213,8 +213,8 @@ For raw 13F holdings (as-filed from SEC), use the `sec-api` skill.
 ```python
 import os, httpx
 
-proxy_base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/unusual-whale-proxy")
-api_key = os.environ["OPENROUTER_API_KEY"]
+proxy_base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/unusual-whale-proxy")
+api_key = os.environ["PROXY_API_KEY"]
 headers = {"Authorization": f"Bearer {api_key}", "UW-CLIENT-API-ID": "100001"}
 
 resp = httpx.get(f"{proxy_base.rstrip('/')}/api/option-trades/flow-alerts", headers=headers, params={
@@ -234,8 +234,8 @@ for d in data[:5]:
 ```python
 import os, httpx
 
-proxy_base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/unusual-whale-proxy")
-api_key = os.environ["OPENROUTER_API_KEY"]
+proxy_base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/unusual-whale-proxy")
+api_key = os.environ["PROXY_API_KEY"]
 headers = {"Authorization": f"Bearer {api_key}", "UW-CLIENT-API-ID": "100001"}
 
 resp = httpx.get(f"{proxy_base.rstrip('/')}/api/screener/option-contracts", headers=headers, params={
@@ -256,8 +256,8 @@ for d in data[:10]:
 ```python
 import os, httpx
 
-proxy_base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/unusual-whale-proxy")
-api_key = os.environ["OPENROUTER_API_KEY"]
+proxy_base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/unusual-whale-proxy")
+api_key = os.environ["PROXY_API_KEY"]
 headers = {"Authorization": f"Bearer {api_key}", "UW-CLIENT-API-ID": "100001"}
 
 resp = httpx.get(f"{proxy_base.rstrip('/')}/api/market/market-tide", headers=headers, timeout=20)
@@ -272,8 +272,8 @@ if data:
 ```python
 import os, httpx
 
-proxy_base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/unusual-whale-proxy")
-api_key = os.environ["OPENROUTER_API_KEY"]
+proxy_base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/unusual-whale-proxy")
+api_key = os.environ["PROXY_API_KEY"]
 headers = {"Authorization": f"Bearer {api_key}", "UW-CLIENT-API-ID": "100001"}
 
 resp = httpx.get(f"{proxy_base.rstrip('/')}/api/darkpool/NVDA", headers=headers, timeout=20)
@@ -287,8 +287,8 @@ for d in data[:5]:
 ```python
 import os, httpx
 
-proxy_base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/unusual-whale-proxy")
-api_key = os.environ["OPENROUTER_API_KEY"]
+proxy_base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/unusual-whale-proxy")
+api_key = os.environ["PROXY_API_KEY"]
 headers = {"Authorization": f"Bearer {api_key}", "UW-CLIENT-API-ID": "100001"}
 
 resp = httpx.get(f"{proxy_base.rstrip('/')}/api/stock/SPY/spot-exposures/expiry-strike", headers=headers, timeout=20)

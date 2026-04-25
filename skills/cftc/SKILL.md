@@ -19,8 +19,8 @@ DATASETS = {
 }
 
 def _cftc_get(dataset_key: str, params: dict) -> list:
-    base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/cftc-proxy")
-    token = os.environ["OPENROUTER_API_KEY"]
+    base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/cftc-proxy")
+    token = os.environ["PROXY_API_KEY"]
     query = urllib.parse.urlencode(params)
     url = f"{base.rstrip('/')}/resource/{DATASETS[dataset_key]}.json?{query}"
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "User-Agent": "curl/7.88.1"})

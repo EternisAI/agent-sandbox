@@ -11,8 +11,8 @@ Use HTTP requests to the backend SEC proxy. Do not use the `sec-api` Python SDK 
 ## Authentication and Proxy Base Override
 
 ```bash
-PROXY_BASE="${OPENROUTER_BASE_URL%/api/llm-proxy}/api/sec-proxy"
-TOKEN_ENC="$(jq -nr --arg v "${OPENROUTER_API_KEY}" '$v|@uri')"
+PROXY_BASE="${PROXY_BASE_URL%/api/llm-proxy}/api/sec-proxy"
+TOKEN_ENC="$(jq -nr --arg v "${PROXY_API_KEY}" '$v|@uri')"
 
 # Base Query API endpoint (root path)
 QUERY_URL="${PROXY_BASE}?token=${TOKEN_ENC}"
@@ -137,8 +137,8 @@ One endpoint for both registration and final prospectus retrieval.
 ```bash
 set -euo pipefail
 
-PROXY_BASE="${OPENROUTER_BASE_URL%/api/llm-proxy}/api/sec-proxy"
-TOKEN_ENC="$(jq -nr --arg v "${OPENROUTER_API_KEY}" '$v|@uri')"
+PROXY_BASE="${PROXY_BASE_URL%/api/llm-proxy}/api/sec-proxy"
+TOKEN_ENC="$(jq -nr --arg v "${PROXY_API_KEY}" '$v|@uri')"
 
 # 1) ticker -> CIK
 CIK="$(curl -sS "${PROXY_BASE}/mapping/ticker/AAPL?token=${TOKEN_ENC}" \

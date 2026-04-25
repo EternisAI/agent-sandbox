@@ -22,8 +22,8 @@ The `massive` Python package provides typed access to the full Massive.com (form
 import os
 from massive import RESTClient
 
-proxy_base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/massive-proxy")
-client = RESTClient(api_key=os.environ["OPENROUTER_API_KEY"], base=proxy_base)
+proxy_base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/massive-proxy")
+client = RESTClient(api_key=os.environ["PROXY_API_KEY"], base=proxy_base)
 ```
 
 ## Getting the Current/Latest Price (recommended approach)
@@ -35,8 +35,8 @@ import os
 from datetime import date, timedelta
 from massive import RESTClient
 
-proxy_base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/massive-proxy")
-client = RESTClient(api_key=os.environ["OPENROUTER_API_KEY"], base=proxy_base)
+proxy_base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/massive-proxy")
+client = RESTClient(api_key=os.environ["PROXY_API_KEY"], base=proxy_base)
 
 # 1. Previous close -- always available, returns a LIST (access [0])
 prev = client.get_previous_close_agg("AAPL")
@@ -209,8 +209,8 @@ import os, math, time
 from datetime import date, timedelta
 from massive import RESTClient
 
-proxy_base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/massive-proxy")
-client = RESTClient(api_key=os.environ["OPENROUTER_API_KEY"], base=proxy_base)
+proxy_base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/massive-proxy")
+client = RESTClient(api_key=os.environ["PROXY_API_KEY"], base=proxy_base)
 
 tickers = ["AAPL", "MSFT", "GOOGL", "AMZN"]
 today = date.today()
@@ -234,8 +234,8 @@ for ticker in tickers:
 import os, itertools
 from massive import RESTClient
 
-proxy_base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/massive-proxy")
-client = RESTClient(api_key=os.environ["OPENROUTER_API_KEY"], base=proxy_base)
+proxy_base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/massive-proxy")
+client = RESTClient(api_key=os.environ["PROXY_API_KEY"], base=proxy_base)
 
 # Treasury yields are daily, inflation is monthly -- both have .date (str "YYYY-MM-DD")
 # Use sort="date.desc" to get most-recent-first (order= is silently ignored)
@@ -259,8 +259,8 @@ import os, itertools
 from datetime import date, timedelta
 from massive import RESTClient
 
-proxy_base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/massive-proxy")
-client = RESTClient(api_key=os.environ["OPENROUTER_API_KEY"], base=proxy_base)
+proxy_base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/massive-proxy")
+client = RESTClient(api_key=os.environ["PROXY_API_KEY"], base=proxy_base)
 
 # Get near-term ATM contracts for greeks/IV — use islice to avoid fetching entire chain
 expiry_cutoff = str(date.today() + timedelta(days=45))
