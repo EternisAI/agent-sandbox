@@ -1,8 +1,8 @@
 #!/bin/bash
 set -e
 
-: "${OPENROUTER_BASE_URL:?OPENROUTER_BASE_URL is required}"
-: "${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is required}"
+: "${PROXY_BASE_URL:?PROXY_BASE_URL is required}"
+: "${PROXY_API_KEY:?PROXY_API_KEY is required}"
 
 mkdir -p /data/opencode /data/workspaces
 export OPENCODE_DB=/data/opencode/opencode.db
@@ -15,8 +15,8 @@ cat > /home/sandbox/.config/opencode/opencode.json <<EOF
       "npm": "@ai-sdk/openai",
       "name": "OpenRouter",
       "options": {
-        "baseURL": "$OPENROUTER_BASE_URL",
-        "apiKey": "$OPENROUTER_API_KEY",
+        "baseURL": "$PROXY_BASE_URL",
+        "apiKey": "$PROXY_API_KEY",
         "timeout": 180000,
         "chunkTimeout": 120000
       }

@@ -14,8 +14,8 @@ import urllib.request
 import json
 import os
 
-base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/hf-proxy")
-token = os.environ["OPENROUTER_API_KEY"]
+base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/hf-proxy")
+token = os.environ["PROXY_API_KEY"]
 
 def hf_get(path: str, params: dict | None = None) -> dict | list:
     url = f"{base.rstrip('/')}/{path.lstrip('/')}"
@@ -68,8 +68,8 @@ submittedBy.name    → curator name — credibility signal (daily feed only)
 ```python
 import urllib.parse, urllib.request, json, os
 
-base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/hf-proxy")
-token = os.environ["OPENROUTER_API_KEY"]
+base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/hf-proxy")
+token = os.environ["PROXY_API_KEY"]
 
 def hf_get(path, params=None):
     url = f"{base.rstrip('/')}/{path.lstrip('/')}"
@@ -94,8 +94,8 @@ for item in papers:
 ```python
 import urllib.parse, urllib.request, json, os
 
-base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/hf-proxy")
-token = os.environ["OPENROUTER_API_KEY"]
+base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/hf-proxy")
+token = os.environ["PROXY_API_KEY"]
 
 def hf_get(path, params=None):
     url = f"{base.rstrip('/')}/{path.lstrip('/')}"
@@ -123,8 +123,8 @@ print(f"Authors: {', '.join(authors[:5])}")
 ```python
 import urllib.parse, urllib.request, json, os
 
-base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/hf-proxy")
-token = os.environ["OPENROUTER_API_KEY"]
+base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/hf-proxy")
+token = os.environ["PROXY_API_KEY"]
 
 def hf_get(path, params=None):
     url = f"{base.rstrip('/')}/{path.lstrip('/')}"
@@ -148,8 +148,8 @@ for item in results:
 ```python
 import urllib.parse, urllib.request, json, os
 
-base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/hf-proxy")
-token = os.environ["OPENROUTER_API_KEY"]
+base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/hf-proxy")
+token = os.environ["PROXY_API_KEY"]
 
 def hf_get(path, params=None):
     url = f"{base.rstrip('/')}/{path.lstrip('/')}"
@@ -173,8 +173,8 @@ else:
 ```python
 import urllib.parse, urllib.request, json, os
 
-base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/hf-proxy")
-token = os.environ["OPENROUTER_API_KEY"]
+base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/hf-proxy")
+token = os.environ["PROXY_API_KEY"]
 
 def hf_get(path, params=None):
     url = f"{base.rstrip('/')}/{path.lstrip('/')}"

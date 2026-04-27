@@ -14,8 +14,8 @@ Use the `finnhub-python` package through the backend proxy. Do not use direct ve
 import os
 import finnhub
 
-proxy_base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/finnhub-proxy")
-api_key = os.environ["OPENROUTER_API_KEY"]
+proxy_base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/finnhub-proxy")
+api_key = os.environ["PROXY_API_KEY"]
 
 client = finnhub.Client(api_key=api_key)
 client.API_URL = proxy_base.rstrip("/")
@@ -293,8 +293,8 @@ Pass `metric="all"` to get all 132 available fields.
 import os
 import finnhub
 
-proxy_base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/finnhub-proxy")
-client = finnhub.Client(api_key=os.environ["OPENROUTER_API_KEY"])
+proxy_base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/finnhub-proxy")
+client = finnhub.Client(api_key=os.environ["PROXY_API_KEY"])
 client.API_URL = proxy_base.rstrip("/")
 
 symbol = "AAPL"
@@ -315,8 +315,8 @@ for r in rev.get("data", [])[:4]:
 import os
 import finnhub
 
-proxy_base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/finnhub-proxy")
-client = finnhub.Client(api_key=os.environ["OPENROUTER_API_KEY"])
+proxy_base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/finnhub-proxy")
+client = finnhub.Client(api_key=os.environ["PROXY_API_KEY"])
 client.API_URL = proxy_base.rstrip("/")
 
 symbol = "AAPL"
@@ -338,8 +338,8 @@ for d in insider.get("data", [])[-6:]:
 import os
 import finnhub
 
-proxy_base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/finnhub-proxy")
-client = finnhub.Client(api_key=os.environ["OPENROUTER_API_KEY"])
+proxy_base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/finnhub-proxy")
+client = finnhub.Client(api_key=os.environ["PROXY_API_KEY"])
 client.API_URL = proxy_base.rstrip("/")
 
 data = client.stock_social_sentiment("GME")
@@ -354,8 +354,8 @@ import os
 import finnhub
 from datetime import date, timedelta
 
-proxy_base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/finnhub-proxy")
-client = finnhub.Client(api_key=os.environ["OPENROUTER_API_KEY"])
+proxy_base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/finnhub-proxy")
+client = finnhub.Client(api_key=os.environ["PROXY_API_KEY"])
 client.API_URL = proxy_base.rstrip("/")
 
 symbol = "AAPL"
@@ -379,8 +379,8 @@ import os
 import finnhub
 from datetime import date, timedelta
 
-proxy_base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/finnhub-proxy")
-client = finnhub.Client(api_key=os.environ["OPENROUTER_API_KEY"])
+proxy_base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/finnhub-proxy")
+client = finnhub.Client(api_key=os.environ["PROXY_API_KEY"])
 client.API_URL = proxy_base.rstrip("/")
 
 today = str(date.today())
@@ -404,8 +404,8 @@ for ipo in ipos.get("ipoCalendar", [])[:5]:
 import os
 import finnhub
 
-proxy_base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/finnhub-proxy")
-client = finnhub.Client(api_key=os.environ["OPENROUTER_API_KEY"])
+proxy_base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/finnhub-proxy")
+client = finnhub.Client(api_key=os.environ["PROXY_API_KEY"])
 client.API_URL = proxy_base.rstrip("/")
 
 result = client.company_basic_financials("AAPL", "all")
@@ -423,8 +423,8 @@ print(f"ROE (TTM): {m.get('roeTTM'):.2f}%")
 import os
 import finnhub
 
-proxy_base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/finnhub-proxy")
-client = finnhub.Client(api_key=os.environ["OPENROUTER_API_KEY"])
+proxy_base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/finnhub-proxy")
+client = finnhub.Client(api_key=os.environ["PROXY_API_KEY"])
 client.API_URL = proxy_base.rstrip("/")
 
 symbol = "NVDA"
@@ -451,8 +451,8 @@ for v in filings[:5]:
 import os
 import finnhub
 
-proxy_base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/finnhub-proxy")
-client = finnhub.Client(api_key=os.environ["OPENROUTER_API_KEY"])
+proxy_base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/finnhub-proxy")
+client = finnhub.Client(api_key=os.environ["PROXY_API_KEY"])
 client.API_URL = proxy_base.rstrip("/")
 
 lobby = client.stock_lobbying("AAPL", "2023-01-01", "2026-01-01")

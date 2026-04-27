@@ -16,8 +16,8 @@ import urllib.parse
 import urllib.request
 import json
 
-base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/courtlistener-proxy")
-token = os.environ["OPENROUTER_API_KEY"]
+base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/courtlistener-proxy")
+token = os.environ["PROXY_API_KEY"]
 
 def cl_get(path: str, params: dict | None = None) -> dict:
     url = f"{base.rstrip('/')}/{path.lstrip('/')}"
@@ -65,8 +65,8 @@ def get_docket(docket_id: int) -> dict:
 ```python
 import os, urllib.parse, urllib.request, json
 
-base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/courtlistener-proxy")
-token = os.environ["OPENROUTER_API_KEY"]
+base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/courtlistener-proxy")
+token = os.environ["PROXY_API_KEY"]
 
 def cl_get(path, params=None):
     url = f"{base.rstrip('/')}/{path.lstrip('/')}"
@@ -88,8 +88,8 @@ for r in results.get("results", []):
 ```python
 import os, urllib.parse, urllib.request, json
 
-base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/courtlistener-proxy")
-token = os.environ["OPENROUTER_API_KEY"]
+base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/courtlistener-proxy")
+token = os.environ["PROXY_API_KEY"]
 
 def cl_get(path, params=None):
     url = f"{base.rstrip('/')}/{path.lstrip('/')}"
@@ -112,8 +112,8 @@ for r in results.get("results", []):
 ```python
 import os, urllib.parse, urllib.request, json
 
-base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/courtlistener-proxy")
-token = os.environ["OPENROUTER_API_KEY"]
+base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/courtlistener-proxy")
+token = os.environ["PROXY_API_KEY"]
 
 def cl_get(path, params=None):
     url = f"{base.rstrip('/')}/{path.lstrip('/')}"

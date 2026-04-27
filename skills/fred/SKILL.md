@@ -16,8 +16,8 @@ import urllib.parse
 import urllib.request
 import json
 
-base = os.environ["OPENROUTER_BASE_URL"].replace("/api/llm-proxy", "/api/fred-proxy")
-token = os.environ["OPENROUTER_API_KEY"]
+base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/fred-proxy")
+token = os.environ["PROXY_API_KEY"]
 
 def fred_proxy_get(path: str, params: dict | None = None) -> dict:
     query = urllib.parse.urlencode({"file_type": "json", **(params or {})})
