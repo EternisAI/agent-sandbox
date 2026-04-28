@@ -19,6 +19,16 @@ cat > /home/sandbox/.config/opencode/opencode.json <<EOF
         "apiKey": "$PROXY_API_KEY",
         "timeout": 180000,
         "chunkTimeout": 120000
+      },
+      "models": {
+        "minimax/minimax-m2.5:nitro": {
+          "options": {
+            "provider": {
+              "order": ["mara"],
+              "allow_fallbacks": true
+            }
+          }
+        }
       }
     }
   }
