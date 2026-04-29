@@ -351,7 +351,15 @@ news = list(itertools.islice(client.list_ticker_news(ticker="AAPL"), 10))
 8. **Rate limits:** add `time.sleep(0.5)` between rapid-fire calls.
 9. **`get_grouped_daily_aggs` returns empty for non-trading days** (weekends/holidays) -- no error.
 10. **Crypto tickers** use `X:` prefix (e.g., `X:BTCUSD`), **forex** uses `C:` prefix (e.g., `C:EURUSD`).
-11. **All timestamps are Unix epoch milliseconds (int).** Convert with `datetime.fromtimestamp(ts / 1000)`.
+11. **All timestamps are Unix epoch milliseconds (int) in UTC. The sandbox itself runs in UTC.** A naive `datetime.fromtimestamp(ts / 1000)` returns a UTC clock time with no tzinfo -- if you then label that string "ET" on a chart or in prose, you have silently shifted the whole story by 4-5 hours (e.g. a 16:00 ET earnings drop renders as "20:00 ET"). Always parse as UTC and convert to the venue's local zone before displaying or labeling. For US equities/options that means America/New_York:
+    ```python
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+    ET = ZoneInfo("America/New_York")
+    t = datetime.fromtimestamp(a.timestamp / 1000, tz=timezone.utc).astimezone(ET)
+    print(t.strftime("%Y-%m-%d %H:%M %Z"))   # e.g. 2026-04-29 16:00 EDT
+    ```
+    Sanity-check intraday pulls by printing the first and last bar in ET before charting -- US regular session is 09:30-16:00 ET, extended hours run 04:00-20:00 ET. If your "first bar" prints as 13:30 or "last bar" as 23:55, you forgot to convert and the axis label will lie. Bar timestamps from `get_aggs` mark the bar's start.
 12. **Economy data frequencies differ:** treasury yields are daily, inflation is monthly. Align dates when combining.
 13. **Options `contract_type` values are lowercase strings:** `"call"` or `"put"`.
 14. **`get_snapshot_crypto_book` is deprecated** (returns 404). Use crypto aggregates instead.
