@@ -40,6 +40,7 @@ RUN git config --global user.email "agent@axion.ai" \
 
 COPY --chown=sandbox:sandbox skills/ /home/sandbox/.agents/skills/
 COPY --chown=sandbox:sandbox plugins/ /home/sandbox/.config/opencode/plugins/
+COPY --chown=sandbox:sandbox agent/ /home/sandbox/.config/opencode/agent/
 COPY --chown=sandbox:sandbox entrypoint.sh /sandbox/entrypoint.sh
 RUN chmod +x /sandbox/entrypoint.sh && find /home/sandbox/.agents/skills -name "*.sh" -o -name "*.py" | xargs chmod +x
 
