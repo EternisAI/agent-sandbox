@@ -13,7 +13,7 @@ cat > /home/sandbox/.config/opencode/opencode.json <<EOF
   "default_agent": "axion",
   "provider": {
     "openrouter": {
-      "npm": "@ai-sdk/openai",
+      "npm": "@openrouter/ai-sdk-provider",
       "name": "OpenRouter",
       "options": {
         "baseURL": "$PROXY_BASE_URL",
@@ -29,6 +29,15 @@ cat > /home/sandbox/.config/opencode/opencode.json <<EOF
               "allow_fallbacks": true
             }
           }
+        },
+        "anthropic/claude-opus-4.7": {
+          "options": { "reasoning": { "effort": "high" } }
+        },
+        "anthropic/claude-opus-4.6": {
+          "options": { "reasoning": { "effort": "high" } }
+        },
+        "anthropic/claude-sonnet-4.6": {
+          "options": { "reasoning": { "effort": "high" } }
         }
       }
     }
