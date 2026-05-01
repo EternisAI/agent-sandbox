@@ -254,6 +254,14 @@ for y in yields:
 
 ### Options contract pricing (greeks + IV)
 
+**Choose the right approach based on expiry horizon.**
+
+#### Near-term contracts (within ~60 days)
+
+`list_snapshot_options_chain` returns full snapshot data ordered nearest-expiry first. Safe to use with `islice` for near-term work.
+
+**Critical:** `islice(N)` is a fetch cap, not a data limit. If you receive exactly N contracts and never hit the `break`, there are more contracts — you must increase N and refetch. Do not conclude contracts are missing just because you hit the limit. Keep doubling the limit and refetching until you have enough data, the cutoff is reached, or the chain is exhausted.
+
 ```python
 import os, itertools
 from datetime import date, timedelta
@@ -262,24 +270,85 @@ from massive import RESTClient
 proxy_base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/massive-proxy")
 client = RESTClient(api_key=os.environ["PROXY_API_KEY"], base=proxy_base)
 
-# Get near-term ATM contracts for greeks/IV — use islice to avoid fetching entire chain
-expiry_cutoff = str(date.today() + timedelta(days=45))
-contracts = list(itertools.islice(
-    client.list_snapshot_options_chain("AAPL"),
-    100
-))
+expiry_cutoff = str(date.today() + timedelta(days=60))
+results = []
 
-for c in contracts:
-    if c.details.expiration_date > expiry_cutoff:
-        continue
-    if c.greeks is None or c.implied_volatility is None:
-        continue
+# Start with 250; double and refetch if limit is hit without reaching the cutoff or enough data
+batch = 250
+while True:
+    contracts = list(itertools.islice(
+        client.list_snapshot_options_chain("AAPL"),
+        batch
+    ))
+    hit_cutoff = False
+    for c in contracts:
+        if c.details.expiration_date > expiry_cutoff:
+            hit_cutoff = True
+            break  # chain is ordered nearest-first; stop once past the window
+        if c.greeks is None or c.implied_volatility is None:
+            continue
+        results.append(c)
+        if len(results) >= 20:  # stop once you have enough contracts for your analysis
+            hit_cutoff = True
+            break
+    if hit_cutoff or len(contracts) < batch:
+        break  # done: cutoff reached, enough data collected, or chain exhausted
+    batch *= 2  # hit the limit without enough data — fetch more
+
+for c in results:
     print(f"{c.details.contract_type.upper()} ${c.details.strike_price} exp={c.details.expiration_date} "
           f"IV={c.implied_volatility:.1%} delta={c.greeks.delta:.3f} theta={c.greeks.theta:.3f}")
 ```
 
+#### Far-dated contracts (LEAPS, multi-month horizons)
+
+**Do NOT use `list_snapshot_options_chain` for far-dated contracts.** The chain is ordered nearest-expiry first. A high-volume ticker like SMH has 3,000+ near-term contracts before January 2027 — fetching them all times out.
+
+Use a two-step approach:
+1. `list_options_contracts(...)` — fast server-side filtered metadata (no greeks/IV, sub-second)
+2. `get_snapshot_option(underlying, contract_ticker)` — full snapshot for each contract you need
+
+```python
+import os, itertools, time
+from massive import RESTClient
+
+proxy_base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/massive-proxy")
+client = RESTClient(api_key=os.environ["PROXY_API_KEY"], base=proxy_base)
+
+ticker = "SMH"
+target_expiry = "2027-01-15"
+current_price = 220  # fetch with get_previous_close_agg first
+
+# Step 1: server-filtered metadata — expiry + type + near-money strike range
+meta = list(itertools.islice(
+    client.list_options_contracts(
+        underlying_ticker=ticker,
+        expiration_date=target_expiry,
+        contract_type="call",                          # "call" or "put"
+        strike_price_gte=current_price * 0.90,         # ±10% of spot
+        strike_price_lte=current_price * 1.10,
+        limit=50,
+    ),
+    50,
+))
+print(f"Found {len(meta)} contracts for {ticker} expiring {target_expiry}")
+
+# Step 2: fetch full snapshot (greeks, IV) for each contract
+for m in meta:
+    time.sleep(0.1)  # rate limit
+    snap = client.get_snapshot_option(ticker, m.ticker)
+    iv = snap.implied_volatility
+    g = snap.greeks
+    if iv is None or g is None:
+        continue
+    print(f"CALL ${m.strike_price} exp={m.expiration_date} "
+          f"IV={iv:.1%} delta={g.delta:.3f} theta={g.theta:.4f}")
+```
+
+> `list_options_contracts` also accepts `expiration_date_gte=` / `expiration_date_lte=` to browse available expiries within a date window instead of pinning an exact date.
+
 > For put/call ratio, flow by expiry, or volume analytics use the `unusual-whales` skill
-> (`api/stock/{ticker}/options-volume`, `api/stock/{ticker}/volume-oi-per-expiry`).
+> (`api/stock/{ticker}/options-volume`, `api/stock/{ticker}/option/volume-oi-expiry`).
 
 ## Discovering Methods and Models
 
