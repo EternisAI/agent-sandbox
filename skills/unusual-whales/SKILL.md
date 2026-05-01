@@ -51,10 +51,18 @@ All endpoints are `GET` only. Every path below is relative to the proxy base (e.
   - Params: `limit`, `is_call`, `is_put`, `is_otm`, `min_premium`, `ticker_symbol`, `size_greater_oi`
   - Boolean params filter-when-set — leave unset for "no filter". `side` is uppercase.
 - **Options Screener:** `api/screener/option-contracts`
-  - Params: `limit` (default is 1 — always set explicitly), `min_premium`, `type`, `is_otm`, `issue_types[]`, `min_volume_oi_ratio`, `min_ask_perc` / `max_ask_perc` (both 0–1 decimals)
+  - Params: `limit` (default is 1 — always set explicitly), `min_premium`, `type`, `is_otm`, `issue_types[]`, `min_volume_oi_ratio`, `min_ask_perc` / `max_ask_perc` (both 0–1 decimals), `min_iv_perc` / `max_iv_perc`, `min_delta` / `max_delta`, `min_marketcap` / `max_marketcap`, `min_dte` / `max_dte`, `vol_greater_oi`, `order`, `order_direction`, `page`
 - **Unusual Tickers:** `api/option-trades/unusual-tickers` — tickers with unusual options activity right now
 - **Single Flow Alert:** `api/option-trades/flow-alerts/{id}`
-- **Stock Screener:** `api/screener/stocks`
+- **Stock Screener:** `api/screener/stocks` — screen the entire market without specifying a ticker; supports IV rank, volatility, market cap, and options flow filters
+  - **Volatility/IV params:** `min_iv_rank` / `max_iv_rank` (0–100), `min_volatility` / `max_volatility` (decimal, e.g. `"0.30"` = 30% IV), `min_implied_move_perc` / `max_implied_move_perc`
+  - **Size params:** `min_marketcap` / `max_marketcap` (dollars), `min_underlying_price` / `max_underlying_price`
+  - **Options flow params:** `min_volume` / `max_volume`, `min_premium` / `max_premium`, `min_call_premium` / `max_call_premium`, `min_put_premium` / `max_put_premium`, `min_net_premium` / `max_net_premium`, `min_put_call_ratio` / `max_put_call_ratio`, `min_oi` / `max_oi`, `min_oi_vs_vol` / `max_oi_vs_vol`
+  - **OI change params:** `min_total_oi_change_perc` / `max_total_oi_change_perc`, `min_call_oi_change_perc`, `min_put_oi_change_perc`
+  - **Volume vs avg params:** `min_perc_3_day_total`, `min_perc_30_day_total`, `min_stock_volume_vs_avg30_volume`
+  - **Universe filters:** `sectors[]`, `issue_types[]`, `is_s_p_500` (true only), `has_dividends`
+  - **Sorting:** `order` (any response field), `order_direction` (`asc` / `desc`), `date` (historical date)
+  - **Response fields include:** `ticker`, `name`, `sector`, `marketcap`, `iv_rank`, `iv30d`, `iv30d_1d`, `iv30d_1w`, `iv30d_1m`, `implied_move_perc`, `volatility`, `put_call_ratio`, `total_premium`, `oi`
 
 ### Stock / Ticker Data
 
@@ -248,7 +256,7 @@ resp = httpx.get(f"{proxy_base.rstrip('/')}/api/screener/option-contracts", head
 }, timeout=20)
 data = resp.json().get("data", [])
 for d in data[:10]:
-    print(f"{d.get('ticker_symbol')} {d.get('option_symbol')} premium={d.get('total_premium')}")
+    print(f"{d.get('ticker_symbol')} {d.get('option_symbol')} premium={d.get('premium')}")
 ```
 
 ### Market Tide (Sentiment)
@@ -281,6 +289,41 @@ data = resp.json().get("data", [])
 for d in data[:5]:
     print(f"{d.get('ticker')} price={d.get('price')} size={d.get('size')} at={d.get('executed_at')}")
 ```
+
+### Stock IV Screener (High IV Rank by Market Cap)
+
+```python
+import os, httpx
+
+proxy_base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/unusual-whale-proxy")
+api_key = os.environ["PROXY_API_KEY"]
+headers = {"Authorization": f"Bearer {api_key}", "UW-CLIENT-API-ID": "100001"}
+
+# Large-cap stocks (>$10B) with IV rank 70–99, sorted by IV rank desc
+# Use max_iv_rank="99.9" to exclude 100 (all-time high IV — usually earnings imminent)
+resp = httpx.get(f"{proxy_base.rstrip('/')}/api/screener/stocks", headers=headers, params={
+    "min_marketcap": "10000000000",
+    "min_iv_rank": "70",
+    "max_iv_rank": "99.9",
+    "order": "iv_rank",
+    "order_direction": "desc",
+}, timeout=20)
+data = resp.json().get("data", [])
+
+print(f"{'Ticker':<8} {'IV Rank':>8} {'IV30d':>7} {'Mkt Cap':>10} {'Imp Move%':>10} {'Sector'}")
+print("-" * 75)
+for s in data[:20]:
+    print(
+        f"{s['ticker']:<8} "
+        f"{float(s.get('iv_rank') or 0):>8.1f} "
+        f"{float(s.get('iv30d') or 0)*100:>6.1f}% "
+        f"${float(s.get('marketcap') or 0)/1e9:>7.1f}B "
+        f"{float(s.get('implied_move_perc') or 0)*100:>9.1f}%  "
+        f"{s.get('sector') or ''}"
+    )
+```
+
+> **IV rank 100** = current IV is the highest in the past 52 weeks — almost always earnings within days. After earnings the IV collapses (IV crush), so premium sellers target this window.
 
 ### Gamma Exposure (GEX) by Strike+Expiry
 
