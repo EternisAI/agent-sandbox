@@ -31,9 +31,9 @@ Only use these 14 functions in this skill:
 | --- | --- | --- | --- | --- |
 | EPS Estimates | `company_eps_estimates` | `/stock/eps-estimate` | Forward EPS consensus by quarter/year | Quarterly |
 | Revenue Estimates | `company_revenue_estimates` | `/stock/revenue-estimate` | Forward revenue consensus by quarter/year | Quarterly |
-| Analyst Recommendations | `recommendation_trends` | `/stock/recommendation` | Aggregate buy/hold/sell consensus history | Per analyst action |
 | Upgrades/Downgrades | `upgrade_downgrade` | `/stock/upgrade-downgrade` | Individual analyst rating changes with firm and grade | Event-driven |
-| Price Targets | `price_target` | `/stock/price-target` | Street consensus high/low/mean/median targets | Per analyst action |
+| Analyst Recommendations | `recommendation_trends` | `/stock/recommendation` | Aggregate buy/hold/sell consensus history (only when explicitly requested) | Per analyst action |
+| Price Targets | `price_target` | `/stock/price-target` | Street consensus high/low/mean/median targets (only when explicitly requested) | Per analyst action |
 | Earnings Calendar | `earnings_calendar` | `/calendar/earnings` | Scheduled earnings dates with EPS/revenue estimates | Ongoing |
 | IPO Calendar | `ipo_calendar` | `/calendar/ipo` | Upcoming IPOs with price range, exchange, status | Ongoing |
 | Basic Financials | `company_basic_financials` | `/stock/metric` | P/E, beta, 52-week range, dividend yield, ratios | Daily |
@@ -309,25 +309,6 @@ for r in rev.get("data", [])[:4]:
     print(f"Q{r['quarter']} {r['year']}: Rev avg=${avg_b:.1f}B analysts={r['numberAnalysts']}")
 ```
 
-### Analyst Consensus
-
-```python
-import os
-import finnhub
-
-proxy_base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/finnhub-proxy")
-client = finnhub.Client(api_key=os.environ["PROXY_API_KEY"])
-client.API_URL = proxy_base.rstrip("/")
-
-symbol = "AAPL"
-
-recs = client.recommendation_trends(symbol)
-if recs:
-    r = recs[0]
-    total = r['strongBuy'] + r['buy'] + r['hold'] + r['sell'] + r['strongSell']
-    print(f"Analyst consensus ({r['period']}): strongBuy={r['strongBuy']} buy={r['buy']} hold={r['hold']} sell={r['sell']} strongSell={r['strongSell']} total={total}")
-```
-
 ### Insider MSPR (only when specifically requested)
 
 ```python
@@ -360,7 +341,7 @@ for d in data.get("data", [])[-7:]:
     print(f"{d['atTime']}: score={d['score']:.2f} mentions={d['mention']} (+{d['positiveMention']}/-{d['negativeMention']})")
 ```
 
-### Analyst Actions + Price Target
+### Analyst Rating Actions (Upgrades/Downgrades)
 
 ```python
 import os
@@ -377,11 +358,14 @@ to_date = str(date.today())
 
 upgrades = client.upgrade_downgrade(symbol=symbol, _from=from_date, to=to_date)
 for u in upgrades[:5]:
-    pt = f" PT=${u['priceTarget']}" if u.get('priceTarget') else ""
-    print(f"{u['company']}: {u['fromGrade']} → {u['toGrade']} ({u['action']}){pt}")
+    print(f"{u['company']}: {u['fromGrade']} → {u['toGrade']} ({u['action']})")
+```
 
+### Price Target Consensus (only when explicitly requested)
+
+```python
 pt = client.price_target(symbol)
-print(f"\nPrice target consensus ({pt['numberAnalysts']} analysts): "
+print(f"Price target consensus ({pt['numberAnalysts']} analysts): "
       f"mean=${pt['targetMean']:.0f} low=${pt['targetLow']:.0f} high=${pt['targetHigh']:.0f}")
 ```
 
@@ -488,3 +472,4 @@ for d in spend.get("data", [])[:5]:
 - The `freq` param for estimates accepts `"quarterly"` or `"annual"`.
 - `earnings_calendar` with `symbol=""` returns all tickers (1500+) — always pass a specific `symbol` unless you need the full market calendar.
 - `stock_uspto_patent` hard cap is 250 records/call — use ≤3 month windows for large-cap tech companies and check `len(data) == 250` to detect truncation.
+- `price_target` and `recommendation_trends` return sell-side consensus that herds toward price and adds noise. Only call them when the task explicitly asks for analyst coverage or price targets. Use `upgrade_downgrade` for individual rating actions — those are useful as event-driven sentiment signals.
