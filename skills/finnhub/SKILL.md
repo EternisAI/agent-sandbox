@@ -1,6 +1,6 @@
 ---
 name: finnhub
-description: Fetch EPS/revenue estimates, analyst recommendations, upgrades/downgrades, price targets, earnings/IPO calendars, fundamental metrics, insider sentiment (MSPR), social sentiment, lobbying, USA spending, USPTO patents, and H1B visa applications via the Finnhub Python SDK through the backend proxy. Most endpoints require a stock ticker (public companies only); exceptions are ipo_calendar and earnings_calendar.
+description: Fetch EPS/revenue estimates, earnings/IPO calendars, fundamental metrics, insider sentiment (MSPR), social sentiment, lobbying, USA spending, USPTO patents, and H1B visa applications via the Finnhub Python SDK through the backend proxy. Most endpoints require a stock ticker (public companies only); exceptions are ipo_calendar and earnings_calendar.
 allowed-tools: Bash(python3 -c *), Bash(python3 - *), Bash(python3 *)
 ---
 
@@ -309,7 +309,7 @@ for r in rev.get("data", [])[:4]:
     print(f"Q{r['quarter']} {r['year']}: Rev avg=${avg_b:.1f}B analysts={r['numberAnalysts']}")
 ```
 
-### Analyst Consensus + Insider MSPR
+### Analyst Consensus
 
 ```python
 import os
@@ -326,6 +326,19 @@ if recs:
     r = recs[0]
     total = r['strongBuy'] + r['buy'] + r['hold'] + r['sell'] + r['strongSell']
     print(f"Analyst consensus ({r['period']}): strongBuy={r['strongBuy']} buy={r['buy']} hold={r['hold']} sell={r['sell']} strongSell={r['strongSell']} total={total}")
+```
+
+### Insider MSPR (only when specifically requested)
+
+```python
+import os
+import finnhub
+
+proxy_base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/finnhub-proxy")
+client = finnhub.Client(api_key=os.environ["PROXY_API_KEY"])
+client.API_URL = proxy_base.rstrip("/")
+
+symbol = "AAPL"
 
 insider = client.stock_insider_sentiment(symbol, "2025-01-01", "2026-04-01")
 for d in insider.get("data", [])[-6:]:
