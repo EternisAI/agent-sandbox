@@ -145,9 +145,9 @@ For authoritative financials (10-K/10-Q line items, restatements, amendments), u
 - **Late Reports:** `api/congress/late-reports`
 - **Politician Recent Trades:** `api/politician-portfolios/recent_trades` — working on our plan
 
-### Insiders
+### Insiders (only when specifically requested)
 
-For raw Form 4 filings (as-filed from SEC), use the `sec-api` skill. UW pre-aggregates same-person/same-day/same-code rows and adds market-wide filters, which is more convenient for flow-style queries.
+For raw Form 4 filings (as-filed from SEC), use the `sec-api` skill. UW pre-aggregates same-person/same-day/same-code rows and adds market-wide filters, which is more convenient for flow-style queries. Most insider filings are routine 10b5-1 plan sales or options exercises -- only fetch when the coordinator specifically asks about insider activity.
 
 - **Ticker Flow:** `api/insider/{ticker}/ticker-flow`
 - **Sector Flow:** `api/insider/{sector}/sector-flow`
