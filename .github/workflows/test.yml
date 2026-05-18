@@ -1,0 +1,36 @@
+name: Test
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plugin-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Keep in sync with the Node major+minor pinned in Dockerfile.
+          # Bumping here without bumping the Dockerfile (or vice-versa)
+          # means tests run on a different runtime than production.
+          node-version: '24.7'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # pdf-reader.test.js drives test-PDF creation through pymupdf, and the
+      # plugin under test shells out to extract_pdf.py which imports pymupdf
+      # via pymupdf4llm. Pin to the same version baked into the Dockerfile
+      # so CI exercises the same Python runtime as the production sandbox.
+      - name: Install plugin Python deps
+        run: pip install --no-cache-dir pymupdf4llm==1.27.2.2
+
+      - name: Run plugin tests
+        run: node --test plugins/*.test.js
