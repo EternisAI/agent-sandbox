@@ -12,7 +12,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join, dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REQUIRED_KEYS = ["name", "description", "allowed-tools"];
@@ -66,15 +66,20 @@ describe("SKILL.md manifests", () => {
         assert.equal(fields.name, skill, `${manifestPath} declares name="${fields.name}" but lives in skills/${skill}/`);
       });
 
-      it("all ${CLAUDE_SKILL_DIR} script paths exist", () => {
+      it("all ${CLAUDE_SKILL_DIR} script paths exist and stay inside the skill dir", () => {
         const tools = fields["allowed-tools"] || "";
         const re = /\$\{CLAUDE_SKILL_DIR\}\/([A-Za-z0-9._\/-]+)/g;
+        const skillRoot = resolve(SKILLS_DIR, skill);
         const seen = new Set();
         for (const m of tools.matchAll(re)) {
           const rel = m[1];
           if (seen.has(rel)) continue;
           seen.add(rel);
-          const fullPath = join(SKILLS_DIR, skill, rel);
+          const fullPath = resolve(skillRoot, rel);
+          assert.ok(
+            fullPath === skillRoot || fullPath.startsWith(skillRoot + sep),
+            `${manifestPath} references \${CLAUDE_SKILL_DIR}/${rel} which resolves outside skills/${skill}/`
+          );
           assert.ok(
             existsSync(fullPath) && statSync(fullPath).isFile(),
             `${manifestPath} references \${CLAUDE_SKILL_DIR}/${rel} but ${fullPath} does not exist`
