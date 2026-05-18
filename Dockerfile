@@ -14,8 +14,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && [ -f /usr/bin/bash ] || ln -s /bin/bash /usr/bin/bash
 
+# Pin to a specific Node minor (per project rule: pin all tool versions).
+# Keep in sync with .github/workflows/test.yml `node-version` so tests run on
+# the same runtime as the production sandbox container. The wildcard pins
+# the minor; patches within 24.7 still float — accept that for one minor's
+# worth of patch drift in exchange for not having to chase nodesource's
+# exact apt version strings on every CI rebuild.
 RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
-    && apt-get install -y nodejs \
+    && apt-get install -y "nodejs=24.7.*" \
     && rm -rf /var/lib/apt/lists/*
 
 RUN corepack enable && corepack prepare pnpm@10.6.5 --activate
