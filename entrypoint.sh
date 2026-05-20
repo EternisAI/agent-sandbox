@@ -38,7 +38,22 @@ cat > /home/sandbox/.config/opencode/opencode.json <<EOF
         },
         "anthropic/claude-sonnet-4.6": {
           "options": { "reasoning": { "effort": "high" } }
-        }
+        },
+        "openai/gpt-5.4": {},
+        "openai/gpt-5.4-pro": {},
+        "openai/gpt-5.5": {},
+        "google/gemini-3.1-pro-preview": {
+          "options": { "reasoning": { "effort": "high" } }
+        },
+        "google/gemini-3.1-flash-lite-preview": {
+          "options": { "reasoning": { "effort": "high" } }
+        },
+        "google/gemini-3.5-flash": {
+          "options": { "reasoning": { "effort": "high" } }
+        },
+        "moonshotai/kimi-k2.6": {},
+        "z-ai/glm-5.1": {},
+        "deepseek/deepseek-v4-pro": {}
       }
     }
   }
