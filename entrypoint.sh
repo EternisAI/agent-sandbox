@@ -31,17 +31,56 @@ cat > /home/sandbox/.config/opencode/opencode.json <<EOF
           }
         },
         "anthropic/claude-opus-4.7": {
-          "options": { "reasoning": { "effort": "high" } }
+          "options": {
+            "reasoning": { "effort": "high" },
+            "provider": {
+              "order": ["anthropic"],
+              "allow_fallbacks": false
+            }
+          }
         },
         "anthropic/claude-opus-4.6": {
-          "options": { "reasoning": { "effort": "high" } }
+          "options": {
+            "reasoning": { "effort": "high" },
+            "provider": {
+              "order": ["anthropic"],
+              "allow_fallbacks": false
+            }
+          }
         },
         "anthropic/claude-sonnet-4.6": {
-          "options": { "reasoning": { "effort": "high" } }
+          "options": {
+            "reasoning": { "effort": "high" },
+            "provider": {
+              "order": ["anthropic"],
+              "allow_fallbacks": false
+            }
+          }
         },
-        "openai/gpt-5.4": {},
-        "openai/gpt-5.4-pro": {},
-        "openai/gpt-5.5": {},
+        "openai/gpt-5.4": {
+          "options": {
+            "provider": {
+              "order": ["openai"],
+              "allow_fallbacks": false
+            }
+          }
+        },
+        "openai/gpt-5.4-pro": {
+          "options": {
+            "provider": {
+              "order": ["openai"],
+              "allow_fallbacks": false
+            }
+          }
+        },
+        "openai/gpt-5.5": {
+          "options": {
+            "provider": {
+              "order": ["openai"],
+              "allow_fallbacks": false
+            }
+          }
+        },
         "google/gemini-3.1-pro-preview": {
           "options": { "reasoning": { "effort": "high" } }
         },
