@@ -99,6 +99,14 @@ cat > /home/sandbox/.config/opencode/opencode.json <<EOF
 }
 EOF
 
+# The backend may supply the agent baseline (axion.md body) per container so it
+# can be edited per preset without rebuilding this image. When unset, the
+# committed agent/axion.md baked into the image is used unchanged.
+if [ -n "$AXION_AGENT_BASELINE" ]; then
+  { printf -- '---\nmode: primary\n---\n\n'; printf '%s' "$AXION_AGENT_BASELINE"; } \
+    > /home/sandbox/.config/opencode/agent/axion.md
+fi
+
 exec opencode serve \
   --hostname 0.0.0.0 \
   --port 4096
