@@ -23,6 +23,48 @@ client.API_URL = proxy_base.rstrip("/")
 
 The SDK sends `token=` as a query param automatically. Override `client.API_URL` to route through the proxy.
 
+## GCC / Dubai coverage
+
+Finnhub covers the major Middle East exchanges. Pass the exchange suffix on the ticker (`EMAAR.DB`, `FAB.AD`, `2222.SR`). The exchange suffix is one of:
+
+| Exchange | Country | Suffix | MIC |
+|---|---|---|---|
+| Dubai Financial Market (DFM) | UAE | `.DB` | XDFM |
+| Abu Dhabi Securities Exchange (ADX) | UAE | `.AD` | XADS |
+| Saudi Stock Exchange (Tadawul) | Saudi Arabia | `.SR` | XSAU |
+| Qatar Exchange | Qatar | `.QA` | DSMD |
+| Bahrain Bourse | Bahrain | `.BH` | XBAH |
+| Kuwait Stock Exchange | Kuwait | `.KW` | XKUW |
+
+To discover tickers on an exchange, call `client.stock_symbols(exchange="DB")` (or `AD`, `SR`, etc.) — returns all listed names with their `displaySymbol`, `description`, `mic`, `currency`, and `type`. The DFM catalog has ~69 names, ADX ~196, Tadawul ~649.
+
+### What works for GCC tickers
+
+Empirically confirmed against the current proxy contract (tested 2026-06-09 across DEWA.DB, EMAAR.DB, EMIRATESNBD.DB, DU.DB, SALIK.DB, TALABAT.DB, PARKIN.DB, EMPOWER.DB, FAB.AD, 2222.SR):
+
+- ✅ `company_basic_financials` — full metric set, currency in AED/SAR. Use for market cap, P/E, ROE, 52W returns.
+- ✅ `company_eps_estimates`, `company_revenue_estimates` — forward consensus with analyst count.
+- ✅ `recommendation_trends` — aggregate buy/hold/sell history, often 15-22 analysts on the largest Dubai names.
+- ✅ `earnings_calendar` (pass the GCC ticker as `symbol`) — quarterly EPS/revenue estimates with `epsActual`/`revenueActual` after report.
+- ✅ Quarterly earnings history (via the same calendar call, looking at past quarters with `epsActual` populated).
+
+### What is blocked or empty for GCC tickers
+
+- ❌ `price_target`, `upgrade_downgrade` — return `{"error":"You don't have access to this resource."}` for GCC tickers. Skip them on Dubai questions.
+- ❌ `stock_social_sentiment` — same access error. The sentiment agent's regional press search (Al Arabiya, The National, MEED, WAM via `exa_search`) is the right channel for GCC discourse, not this endpoint.
+- ❌ Live prices, historical OHLCV candles, dividend history — not exposed in this skill at all; for those, fall back on Massive (which lacks GCC coverage anyway) or the `dfm-adx` build-out planned in `plans/potential-data-dubai.md`.
+- ⚠️ `stock_insider_sentiment` (MSPR), `stock_uspto_patent`, `stock_visa_application`, `stock_lobbying`, `stock_usa_spending` — **US-only by data scope**. Calling them with GCC tickers returns an empty `data: []`, not an error. Do not infer absence of activity from absence of data — these endpoints simply do not cover GCC.
+
+### Currency note
+
+GCC tickers return values in their native currency, not USD:
+
+- DFM and ADX tickers → AED (dirham). USD/AED is pegged at 3.6725, so multiply AED by ~0.2723 if a USD comparison is needed, but quote the native AED first in any artifact field that touches the user.
+- Tadawul tickers → SAR (riyal). USD/SAR is pegged at 3.75 since 1986.
+- Qatar → QAR (pegged 3.64), Bahrain → BHD (pegged 0.376), Kuwait → KWD (basket float, ~0.307), Oman → OMR (pegged 0.3845).
+
+Always read the `currency` field on `stock/profile2` or the symbol catalog before doing arithmetic.
+
 ## Supported Endpoints
 
 Only use these 14 functions in this skill:
@@ -414,6 +456,65 @@ print(f"Dividend yield: {m.get('dividendYieldIndicatedAnnual'):.2f}%")
 print(f"ROE (TTM): {m.get('roeTTM'):.2f}%")
 ```
 
+### Dubai listed company — fundamentals + consensus + earnings history
+
+Works the same way as a US name, but the ticker carries the exchange suffix and values come back in AED. The example below covers a Dubai-strategy lookup that an Axion agent would do when the question touches a DFM-listed name (DEWA, Emaar, Salik, Empower, Talabat, Parkin, Emirates NBD, du). Do NOT call `price_target`, `upgrade_downgrade`, or `stock_social_sentiment` for these tickers — they return an access error.
+
+```python
+import os
+import finnhub
+from datetime import date
+
+proxy_base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/finnhub-proxy")
+client = finnhub.Client(api_key=os.environ["PROXY_API_KEY"])
+client.API_URL = proxy_base.rstrip("/")
+
+# DEWA on DFM. Substitute EMAAR.DB, EMIRATESNBD.DB, SALIK.DB, etc.
+symbol = "DEWA.DB"
+
+# 1. Fundamentals — note the currency is AED, not USD.
+fin = client.company_basic_financials(symbol, "all")
+m = fin.get("metric", {})
+mcap_aed_b = m.get("marketCapitalization", 0) / 1000  # value is in millions of AED
+print(f"{symbol} market cap: AED {mcap_aed_b:.1f}B  P/E: {m.get('peNormalizedAnnual') or m.get('peBasicExclExtraTTM')}")
+print(f"  52W return: {m.get('52WeekPriceReturnDaily'):.1f}%   ROE TTM: {m.get('roeTTM')}")
+print(f"  13W return: {m.get('13WeekPriceReturnDaily'):.1f}%   26W: {m.get('26WeekPriceReturnDaily'):.1f}%")
+
+# 2. Forward consensus.
+eps = client.company_eps_estimates(symbol, freq="quarterly")
+for e in eps.get("data", [])[:4]:
+    print(f"  Q{e['quarter']} {e['year']}: EPS avg={e['epsAvg']:.3f} AED (analysts={e['numberAnalysts']})")
+
+rev = client.company_revenue_estimates(symbol, freq="quarterly")
+for r in rev.get("data", [])[:4]:
+    avg_b = r["revenueAvg"] / 1e9
+    print(f"  Q{r['quarter']} {r['year']}: Rev avg=AED {avg_b:.2f}B (analysts={r['numberAnalysts']})")
+
+# 3. Analyst consensus history (works for GCC; price_target / upgrade_downgrade do NOT).
+recs = client.recommendation_trends(symbol)
+if recs:
+    r = recs[0]
+    print(f"  {r['period']} consensus: strongBuy={r['strongBuy']} buy={r['buy']} hold={r['hold']} sell={r['sell']} strongSell={r['strongSell']}")
+
+# 4. Quarterly earnings history with surprise — fetched via earnings_calendar over the past year.
+today = str(date.today())
+year_ago = str(date.today().replace(year=date.today().year - 1))
+ec = client.earnings_calendar(_from=year_ago, to=today, symbol=symbol, international=True)
+for q in ec.get("earningsCalendar", []):
+    actual = q.get("epsActual")
+    if actual is None:
+        continue
+    est = q.get("epsEstimate") or 0
+    surprise = ((actual - est) / est * 100) if est else 0
+    print(f"  {q['date']} Q{q['quarter']} {q['year']}: EPS actual={actual} est={est} surprise={surprise:+.1f}%")
+```
+
+Notes specific to this call shape on GCC tickers:
+
+- `marketCapitalization` in `company_basic_financials` is reported in millions of the native currency (AED for `.DB`/`.AD`, SAR for `.SR`, etc.) — divide by 1000 to get billions of native currency, never by 1e9.
+- Pass `international=True` to `earnings_calendar` when querying GCC names. Without it the call may return an empty list for non-US tickers depending on the SDK version.
+- Coverage depth on the largest Dubai names is real: at the time of writing, DEWA had 20 analysts, Emaar 21, Emirates NBD 22, du 13, Salik 19, Empower 19, Talabat 18, Parkin 12. Consensus dispersion is meaningful, not a single-analyst stub.
+
 ### USPTO Patents + H1B Visa Applications
 
 ```python
@@ -473,3 +574,4 @@ for d in spend.get("data", [])[:5]:
 - `earnings_calendar` with `symbol=""` returns all tickers (1500+) — always pass a specific `symbol` unless you need the full market calendar.
 - `stock_uspto_patent` hard cap is 250 records/call — use ≤3 month windows for large-cap tech companies and check `len(data) == 250` to detect truncation.
 - `price_target` and `recommendation_trends` return sell-side consensus that herds toward price and adds noise. Only call them when the task explicitly asks for analyst coverage or price targets. Use `upgrade_downgrade` for individual rating actions — those are useful as event-driven sentiment signals.
+- **GCC ticker rules:** for tickers ending `.DB`, `.AD`, `.SR`, `.QA`, `.BH`, or `.KW`, **do NOT call `price_target`, `upgrade_downgrade`, or `stock_social_sentiment`** — they return access errors at the current tier. Do not retry; treat them as unavailable for these tickers and proceed without that signal. `stock_insider_sentiment`, `stock_uspto_patent`, `stock_visa_application`, `stock_lobbying`, and `stock_usa_spending` return empty data for GCC tickers because the underlying datasets are US-only — do NOT report this as "no insider activity" or "no lobbying", report it as "data not available for this jurisdiction." All other endpoints (`company_basic_financials`, `company_eps_estimates`, `company_revenue_estimates`, `recommendation_trends`, `earnings_calendar`, `ipo_calendar`) work normally — read the `currency` field and quote values in the native currency before any USD conversion.
