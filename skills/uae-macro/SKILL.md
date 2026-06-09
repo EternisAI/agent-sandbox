@@ -1,27 +1,184 @@
 ---
 name: uae-macro
-description: Fetch UAE macroeconomic data — GDP, inflation, population, unemployment, trade balance, fiscal indicators — from the World Bank Indicators API (historical) and IMF DataMapper API (forecasts to 2031). Use when users ask about UAE economic indicators, growth, prices, debt, current account, or any country-level macro context for Dubai. No auth required.
+description: Fetch UAE macroeconomic data — CPI, GDP, population, unemployment, trade balance, fiscal indicators. Default backend is FCSC's UAE.Stat SDMX API for fresh series (monthly CPI through Dec 2025, quarterly GDP, PPI, sector GDP, govt revenues/expenditures). World Bank Indicators API is the fallback for long historical series (1960+) and indicators FCSC doesn't carry. IMF DataMapper provides forecasts through 2031. FCSC requires `FIRECRAWL_API_KEY` (Cloudflare WAF). World Bank + IMF are unauthenticated.
 allowed-tools: Bash(python3 -c *), Bash(python3 - *), Bash(python3 *)
 ---
 
-# UAE Macroeconomics API (World Bank + IMF)
+# UAE Macroeconomics
 
-Two complementary public sources for UAE country-level macro data. Both keyed by ISO code `ARE`. No API keys, no proxy.
+Three complementary public sources for UAE country-level macro data, with **FCSC as the freshness default** for CPI / GDP / national accounts.
 
-- **World Bank Indicators API** — long historical series (1960+), development indicators
-- **IMF DataMapper API** — forecasts via WEO (real GDP growth, inflation, debt, current account through 2031)
+## Source selection — pick the right backend
 
-## Base URLs and helpers
+| Question | Backend | Why |
+|---|---|---|
+| Latest UAE CPI (monthly) | **FCSC** | Through Dec 2025; WB has only annual ~12-month lag |
+| Latest UAE quarterly GDP | **FCSC** | No other free monthly/quarterly source |
+| UAE GDP by economic sector (annual) | **FCSC** `DF_NA_ISIC_CUR` | Sector ISIC breakdown |
+| UAE govt revenues + expenditures (annual) | **FCSC** `DF_NA_PFIN_CUR` | National accounts |
+| UAE PPI | **FCSC** `DF_PPI_ALL` | Not in WB |
+| Long historical series (pre-2014) | **World Bank** | FCSC dataflows mostly start 2014 |
+| Population, unemployment, FDI, energy use | **World Bank** | Catalogue depth |
+| GDP / inflation / debt **forecasts** | **IMF** | WEO projections through 2031 |
+| Current account, govt debt as % of GDP | **IMF** | Standard WEO ratios |
+
+## Auth model
+
+- **FCSC** — `FIRECRAWL_API_KEY` env var required. SDMX host (`releaseeuaestat.fcsc.gov.ae`) is Cloudflare-gated; direct urllib gets HTTP 403.
+- **World Bank** — no key, no auth. ISO `ARE`.
+- **IMF DataMapper** — no key, no auth. ISO `ARE`.
+
+---
+
+## Part 1 — FCSC (UAE.Stat SDMX), the freshness default
+
+### Base helpers
 
 ```python
-import json, time, urllib.parse, urllib.request, urllib.error
+import json, os, re, time, urllib.parse, urllib.request, urllib.error
 
-WB_BASE  = "https://api.worldbank.org/v2"
-IMF_BASE = "https://www.imf.org/external/datamapper/api/v1"
+_FIRECRAWL_BASE = "https://api.firecrawl.dev/v1/scrape"
+_UAESTAT_API    = "https://releaseeuaestat.fcsc.gov.ae"  # SDMX REST host (Cloudflare-gated)
 
-def _get(url: str, *, max_retries: int = 3, base_delay: float = 1.0) -> dict:
-    """HTTP GET with retry on 429, 5xx, and timeouts. Both World Bank and IMF are free
-    public APIs that occasionally flake; default 3 retries with exponential backoff."""
+def _fc_key() -> str:
+    k = os.environ.get("FIRECRAWL_API_KEY")
+    if not k:
+        raise RuntimeError("FIRECRAWL_API_KEY env var is required for FCSC. Set it before calling FCSC helpers.")
+    return k
+
+def _firecrawl_scrape(url: str, *, timeout_s: int = 120, formats: list[str] | None = None) -> str:
+    """Scrape via Firecrawl. Returns raw HTML body (which for SDMX is XML/CSV text).
+    `formats=["rawHtml"]` is the default — preserves SDMX XML / CSV exactly."""
+    body = {
+        "url": url,
+        "formats": formats or ["rawHtml"],
+        "timeout": (timeout_s - 10) * 1000,
+    }
+    req = urllib.request.Request(
+        _FIRECRAWL_BASE,
+        data=json.dumps(body).encode(),
+        headers={"Authorization": f"Bearer {_fc_key()}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout_s) as r:
+        resp = json.loads(r.read().decode())
+    if not resp.get("success"):
+        raise RuntimeError(f"Firecrawl failed for {url}: {resp.get('error','no error msg')[:200]}")
+    return (resp.get("data") or {}).get("rawHtml") or (resp.get("data") or {}).get("markdown") or ""
+```
+
+### Curated macro dataflows (versions verified 2026-06-09)
+
+```python
+MACRO_DATAFLOWS = {
+    # Prices
+    "DF_CPI":         {"version": "3.2.0", "freq": "M", "label": "Consumer Price Index, Monthly (through Dec 2025)"},
+    "DF_CPI_ANN":     {"version": "3.2.0", "freq": "A", "label": "CPI Annual"},
+    "DF_PPI_ALL":     {"version": "2.3.0", "freq": "M", "label": "Producer Price Index"},
+    # National accounts
+    "DF_QGDP_CUR":    {"version": "1.8.0", "freq": "Q", "label": "GDP Quarterly — Current Prices"},
+    "DF_QGDP_CON":    {"version": "1.8.0", "freq": "Q", "label": "GDP Quarterly — Constant Prices"},
+    "DF_NA_ISIC_CUR": {"version": "3.4.0", "freq": "A", "label": "GDP — by Economic Sector (ISIC), Annual Current"},
+    "DF_NA_PFIN_CUR": {"version": "3.4.0", "freq": "A", "label": "Govt Revenues & Expenditures, Annual"},
+}
+```
+
+### FCSC tools
+
+```python
+def list_uaestat_macro_dataflows(filter_text: str | None = None) -> list[dict]:
+    """Scrape FCSC's SDMX dataflow registry, optionally filtered by substring.
+    Returns list of {id, version, name_en}. Use to find macro flows not in MACRO_DATAFLOWS
+    (e.g. labour, population, vital stats — FCSC ships ~291 flows total)."""
+    xml = _firecrawl_scrape(
+        f"{_UAESTAT_API}/rest/dataflow/FCSA?detail=allstubs",
+        timeout_s=180,
+    )
+    out = []
+    for m in re.finditer(
+        r'<structure:Dataflow\s+id="(DF_[^"]+)"\s+agencyID="FCSA"\s+version="([^"]+)"',
+        xml,
+    ):
+        df_id, version = m.group(1), m.group(2)
+        seg = xml[m.end():m.end() + 1500]
+        nm = re.search(r'<common:Name xml:lang="en">([^<]+)</common:Name>', seg)
+        name = nm.group(1) if nm else "(no en name)"
+        if not filter_text or filter_text.lower() in name.lower() or filter_text.lower() in df_id.lower():
+            out.append({"id": df_id, "version": version, "name_en": name})
+    return out
+
+def get_uaestat_data(df_id: str, version: str | None = None, *,
+                     key: str = "all", start_period: str | None = None,
+                     end_period: str | None = None,
+                     dimension_at_observation: str = "AllDimensions",
+                     ) -> str:
+    """Fetch SDMX CSV (with labels) for one dataflow via Firecrawl.
+    Auto-resolves version from MACRO_DATAFLOWS if omitted.
+    `start_period` / `end_period`: SDMX period strings (`YYYY`, `YYYY-MM`, `YYYY-Q{1-4}`).
+    Returns raw CSV — pipe through parse_sdmx_csv() to get dicts."""
+    if not version:
+        version = (MACRO_DATAFLOWS.get(df_id) or {}).get("version")
+        if not version:
+            raise ValueError(f"version required for non-curated dataflow {df_id} — call list_uaestat_macro_dataflows() to look up")
+    params = {"format": "csvfilewithlabels", "dimensionAtObservation": dimension_at_observation}
+    if start_period: params["startPeriod"] = start_period
+    if end_period:   params["endPeriod"]   = end_period
+    url = f"{_UAESTAT_API}/rest/data/FCSA,{df_id},{version}/{key}?{urllib.parse.urlencode(params)}"
+    return _firecrawl_scrape(url, timeout_s=180)
+
+def parse_sdmx_csv(csv_text: str) -> list[dict]:
+    """Parse SDMX CSV (csvfilewithlabels format) into list of dicts.
+    Strips structure header rows, keeps observation rows. Columns vary by dataflow.
+    Common keys: TIME_PERIOD, OBS_VALUE, REF_AREA, MEASURE, UNIT_MEASURE."""
+    import csv, io
+    rows = list(csv.DictReader(io.StringIO(csv_text)))
+    return [r for r in rows if r.get("STRUCTURE") == "DATAFLOW"]
+
+# Convenience wrappers — highest-value flows
+
+def get_uae_cpi_monthly(start_month: str = "2024-01", end_month: str | None = None) -> list[dict]:
+    """UAE Consumer Price Index, monthly. Latest period: Dec 2025 (verified 2026-06-09)."""
+    return parse_sdmx_csv(get_uaestat_data("DF_CPI",
+                                           start_period=start_month, end_period=end_month))
+
+def get_uae_cpi_annual(start_year: str = "2010", end_year: str | None = None) -> list[dict]:
+    """UAE CPI annual."""
+    return parse_sdmx_csv(get_uaestat_data("DF_CPI_ANN",
+                                           start_period=start_year, end_period=end_year))
+
+def get_uae_ppi_monthly(start_month: str = "2024-01", end_month: str | None = None) -> list[dict]:
+    """UAE Producer Price Index, monthly."""
+    return parse_sdmx_csv(get_uaestat_data("DF_PPI_ALL",
+                                           start_period=start_month, end_period=end_month))
+
+def get_uae_quarterly_gdp(start_quarter: str = "2022-Q1", end_quarter: str | None = None,
+                          constant_prices: bool = False) -> list[dict]:
+    """UAE quarterly GDP. Default current prices; set constant_prices=True for real GDP."""
+    df_id = "DF_QGDP_CON" if constant_prices else "DF_QGDP_CUR"
+    return parse_sdmx_csv(get_uaestat_data(df_id,
+                                           start_period=start_quarter, end_period=end_quarter))
+
+def get_uae_gdp_by_sector_annual(start_year: str = "2018", end_year: str | None = None) -> list[dict]:
+    """UAE GDP by economic sector (ISIC), annual, current prices."""
+    return parse_sdmx_csv(get_uaestat_data("DF_NA_ISIC_CUR",
+                                           start_period=start_year, end_period=end_year))
+
+def get_uae_govt_revenues_expenditures(start_year: str = "2018", end_year: str | None = None) -> list[dict]:
+    """UAE government revenues and expenditures, annual."""
+    return parse_sdmx_csv(get_uaestat_data("DF_NA_PFIN_CUR",
+                                           start_period=start_year, end_period=end_year))
+```
+
+---
+
+## Part 2 — World Bank Indicators (historical fallback)
+
+```python
+import json, urllib.parse, urllib.request, urllib.error, time
+
+WB_BASE = "https://api.worldbank.org/v2"
+
+def _wb_get(url: str, *, max_retries: int = 3, base_delay: float = 1.0) -> dict:
     last_err = None
     for attempt in range(max_retries + 1):
         try:
@@ -32,10 +189,8 @@ def _get(url: str, *, max_retries: int = 3, base_delay: float = 1.0) -> dict:
             last_err = e
             if e.code == 429 and attempt < max_retries:
                 ra = e.headers.get("Retry-After") if e.headers else None
-                try:
-                    delay = float(ra) if ra else base_delay * (2 ** attempt)
-                except ValueError:
-                    delay = base_delay * (2 ** attempt)
+                try: delay = float(ra) if ra else base_delay * (2 ** attempt)
+                except ValueError: delay = base_delay * (2 ** attempt)
                 time.sleep(max(delay, 1.0)); continue
             if 500 <= e.code < 600 and attempt < max_retries:
                 time.sleep(base_delay * (2 ** attempt)); continue
@@ -46,36 +201,13 @@ def _get(url: str, *, max_retries: int = 3, base_delay: float = 1.0) -> dict:
                 time.sleep(base_delay * (2 ** attempt)); continue
             raise
     raise last_err
-```
-
-## Supported Tools
-
-| Function | Source | Returns |
-| --- | --- | --- |
-| `wb_indicator` | World Bank | Historical time series for any indicator (code → observations) |
-| `wb_search_indicators` | World Bank | Search indicators by keyword (resolve "inflation" → `FP.CPI.TOTL.ZG`) |
-| `imf_indicator` | IMF | Time series including forecasts for any IMF indicator |
-| `imf_list_indicators` | IMF | All 132 IMF indicators with descriptions |
-| `get_popular_uae_indicators` | Static | Curated dict of the most useful UAE indicators across both sources |
-
-## Functions
-
-```python
-import json, urllib.parse, urllib.request
-
-WB_BASE  = "https://api.worldbank.org/v2"
-IMF_BASE = "https://www.imf.org/external/datamapper/api/v1"
-
-def _get(url: str) -> dict:
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; AxionAgent/1.0)"})
-    with urllib.request.urlopen(req, timeout=20) as r:
-        return json.loads(r.read().decode())
 
 def wb_indicator(code: str, start: int = 2010, end: int = 2025) -> list[dict]:
     """Historical World Bank series for UAE. Returns list of {date, value} sorted ascending.
-    Examples: 'NY.GDP.MKTP.CD' (GDP USD), 'FP.CPI.TOTL.ZG' (inflation %), 'SP.POP.TOTL' (population)."""
-    url = f"{WB_BASE}/country/ARE/indicator/{code}?format=json&date={start}:{end}"
-    r = _get(url)
+    Examples: 'NY.GDP.MKTP.CD' (GDP USD), 'FP.CPI.TOTL.ZG' (inflation %), 'SP.POP.TOTL' (population).
+    For fresh monthly CPI / quarterly GDP, use the FCSC helpers above instead."""
+    url = f"{WB_BASE}/country/ARE/indicator/{code}?format=json&date={start}:{end}&per_page=200"
+    r = _wb_get(url)
     if not isinstance(r, list) or len(r) < 2 or not r[1]:
         return []
     obs = [{"date": x["date"], "value": x["value"]} for x in r[1] if x.get("value") is not None]
@@ -84,25 +216,47 @@ def wb_indicator(code: str, start: int = 2010, end: int = 2025) -> list[dict]:
 def wb_search_indicators(query: str, per_page: int = 20) -> list[dict]:
     """Search World Bank indicator catalogue by keyword."""
     url = f"{WB_BASE}/indicator?format=json&per_page={per_page}&search={urllib.parse.quote(query)}"
-    r = _get(url)
+    r = _wb_get(url)
     if not isinstance(r, list) or len(r) < 2:
         return []
     return [{"id": x["id"], "name": x["name"], "source": x.get("sourceOrganization", "")} for x in r[1]]
+```
+
+---
+
+## Part 3 — IMF DataMapper (forecasts to 2031)
+
+```python
+IMF_BASE = "https://www.imf.org/external/datamapper/api/v1"
 
 def imf_indicator(code: str) -> dict:
     """IMF DataMapper series for UAE (includes WEO forecasts to ~2031).
     Returns {year: value} dict. Common codes: 'NGDP_RPCH' (real GDP growth %),
     'PCPIPCH' (inflation %), 'GGXWDG_NGDP' (govt debt % GDP), 'BCA_NGDPD' (current account % GDP)."""
-    r = _get(f"{IMF_BASE}/{code}/ARE")
+    r = _wb_get(f"{IMF_BASE}/{code}/ARE")  # reuses retry helper
     return r.get("values", {}).get(code, {}).get("ARE", {})
 
 def imf_list_indicators() -> dict:
     """All 132 IMF indicators (id → metadata). Filter client-side."""
-    return _get(f"{IMF_BASE}/indicators").get("indicators", {})
+    return _wb_get(f"{IMF_BASE}/indicators").get("indicators", {})
+```
 
+---
+
+## Curated indicators (cross-source)
+
+```python
 def get_popular_uae_indicators() -> dict:
     """Curated indicators by use case."""
     return {
+        "fcsc_fresh": {
+            "DF_CPI":         "Consumer Price Index, monthly (latest Dec 2025)",
+            "DF_QGDP_CUR":    "GDP quarterly, current prices",
+            "DF_QGDP_CON":    "GDP quarterly, constant prices (real GDP)",
+            "DF_PPI_ALL":     "Producer Price Index, monthly",
+            "DF_NA_ISIC_CUR": "GDP by economic sector, annual",
+            "DF_NA_PFIN_CUR": "Govt revenues & expenditures, annual",
+        },
         "wb_historical": {
             "NY.GDP.MKTP.CD":    "GDP (current US$)",
             "NY.GDP.PCAP.CD":    "GDP per capita (current US$)",
@@ -127,13 +281,40 @@ def get_popular_uae_indicators() -> dict:
     }
 ```
 
+---
+
 ## Examples
 
-### UAE GDP trajectory (historical + forecast)
+### Fresh UAE inflation (FCSC monthly)
 
 ```python
-hist = wb_indicator("NY.GDP.MKTP.CD", start=2015, end=2024)
-fcst = imf_indicator("NGDPD")  # IMF gives forecasts past 2024
+rows = get_uae_cpi_monthly(start_month="2025-01", end_month="2025-12")
+by_month = {}
+for r in rows:
+    period = r.get("TIME_PERIOD"); val = r.get("OBS_VALUE")
+    if period and val:
+        by_month[period] = float(val)
+for m in sorted(by_month):
+    print(f"  {m}  CPI index = {by_month[m]:.2f}")
+```
+
+### Fresh UAE quarterly GDP (FCSC)
+
+```python
+rows = get_uae_quarterly_gdp(start_quarter="2024-Q1")
+by_q = {}
+for r in rows:
+    p, v = r.get("TIME_PERIOD"), r.get("OBS_VALUE")
+    if p and v: by_q.setdefault(p, []).append(float(v))
+for q in sorted(by_q):
+    print(f"  {q}  AED {sum(by_q[q]):>15,.0f}")
+```
+
+### UAE GDP trajectory — historical + forecast
+
+```python
+hist = wb_indicator("NY.GDP.MKTP.CD", start=2010, end=2024)
+fcst = imf_indicator("NGDPD")  # IMF forecasts past 2024
 print("WB historical (USD):")
 for o in hist[-5:]:
     print(f"  {o['date']}: ${o['value']:>15,.0f}")
@@ -142,17 +323,21 @@ for y in sorted(fcst.keys())[-5:]:
     print(f"  {y}: ${fcst[y]:>8.1f}B")
 ```
 
-### Inflation comparison: WB actuals vs IMF forecast
+### Inflation: FCSC monthly vs WB annual vs IMF forecast
 
 ```python
+# Aggregate FCSC monthly → annual for sanity check
+fcsc_2025 = get_uae_cpi_monthly(start_month="2025-01", end_month="2025-12")
+fcsc_avg_2025 = sum(float(r["OBS_VALUE"]) for r in fcsc_2025 if r.get("OBS_VALUE")) / max(1, len(fcsc_2025))
 wb = {o["date"]: o["value"] for o in wb_indicator("FP.CPI.TOTL.ZG", 2018, 2024)}
 imf = imf_indicator("PCPIPCH")
-print(f"{'Year':<6}{'WB CPI %':<12}{'IMF CPI %':<12}")
+print(f"FCSC 2025 mean CPI index = {fcsc_avg_2025:.2f}")
+print(f"{'Year':<6}{'WB %':<10}{'IMF %':<10}")
 for y in sorted(set(list(wb.keys()) + list(imf.keys()))):
-    print(f"{y:<6}{wb.get(y,'-'):<12}{imf.get(y,'-'):<12}")
+    print(f"{y:<6}{wb.get(y,'-'):<10}{imf.get(y,'-'):<10}")
 ```
 
-### Find a specific indicator
+### Find a WB indicator
 
 ```python
 hits = wb_search_indicators("oil rent", per_page=5)
@@ -160,24 +345,26 @@ for h in hits:
     print(f"  {h['id']:<25} {h['name']}")
 ```
 
-### One-shot UAE snapshot
-
-```python
-popular = get_popular_uae_indicators()
-for code, label in popular["wb_historical"].items():
-    series = wb_indicator(code, 2022, 2024)
-    if series:
-        latest = series[-1]
-        print(f"{label:<45} {latest['date']}: {latest['value']:,.2f}")
-```
-
 ## Notes
 
-- **No API key, no auth, no proxy** — both APIs are fully open.
-- **ISO code:** UAE is `ARE` (3-letter) for both APIs. World Bank also accepts `AE` (2-letter).
-- **Data lag:** World Bank annual indicators typically lag ~1 year (2024 published mid-2025). IMF includes forecasts so you get current-year + ~5-7 year forward projections.
-- **Some indicators are sparse for UAE** — e.g. IMF `LUR` (unemployment) returns empty for UAE. Fall back to World Bank `SL.UEM.TOTL.ZS` (modeled ILO estimate, returns 2.16% for 2024).
-- **World Bank pagination:** default per_page is 50. For deep series, append `&per_page=200`.
-- **JSON format param required** — World Bank defaults to XML; always include `format=json`.
-- **IMF DataMapper structure:** `{"values": {"<indicator>": {"<iso>": {"<year>": value}}}}`. The `imf_indicator` helper unwraps it.
-- **Keep result sets concise** — process series in Python and print summarized output rather than full dumps.
+### FCSC
+- **`FIRECRAWL_API_KEY` required.** Helpers raise clearly if missing.
+- **Period syntax:** annual `YYYY`, monthly `YYYY-MM`, quarterly `YYYY-Q{1-4}`.
+- **Quarterly CPI `DF_CPI_Q` returns empty** — use `DF_CPI` (monthly) and aggregate, or `DF_CPI_ANN`.
+- **Quarterly GDP version pin:** `DF_QGDP_CUR` requires `version="1.8.0"` — pinned in `MACRO_DATAFLOWS`. Front-end URLs may show higher numbers; the structure registry has the authoritative version.
+- **CSV columns vary** — inspect with `csv.DictReader` first.
+- **Firecrawl is rate-limited** — serialize; `time.sleep(1)` between probes if iterating.
+
+### World Bank
+- **No API key, no auth.** ISO `ARE`.
+- **Data lag:** annual indicators ~1 year (2024 published mid-2025).
+- **JSON format param required** — defaults to XML; always include `format=json`.
+
+### IMF DataMapper
+- **No API key, no auth.** ISO `ARE`.
+- **Forecast horizon:** typically current year + 5-7 years forward (through ~2031).
+- **Sparse for UAE:** `LUR` (unemployment) returns empty — fall back to WB `SL.UEM.TOTL.ZS`.
+- **Structure:** `{"values": {"<indicator>": {"<iso>": {"<year>": value}}}}` — `imf_indicator` unwraps it.
+
+### General
+- **Keep result sets concise** — process in Python and print summarized output rather than full dumps.

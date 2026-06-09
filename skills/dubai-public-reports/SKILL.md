@@ -1,16 +1,17 @@
 ---
 name: dubai-public-reports
-description: Discover and fetch published reports from Dubai government bodies that don't have an API — DHA (health statistics, household health survey, CSCP), DEWA (Annual Statistics, Sustainability Reports, **Investor Relations quarterly financials**), and DET (monthly Tourism Performance Reports). All free, no auth keys, but DEWA requires a Referer header and DHA filenames need URL encoding. Returns list of report URLs/metadata; pair with the project's pdf-reader plugin to actually read PDF contents.
+description: Discover and fetch published reports from Dubai government bodies that don't have an API — DHA (health statistics, household health survey, CSCP), DEWA (Annual Statistics, Sustainability Reports, **Investor Relations quarterly financials**), DET (monthly Tourism Performance Reports), and DSC (Dubai Statistics Center — Statistical Yearbook chapter PDFs, fetched via Wayback Machine since DSC is fully geo-blocked outside UAE). All free, no auth keys, but DEWA requires a Referer header, DHA filenames need URL encoding, and DSC requires Wayback routing. Returns list of report URLs/metadata; pair with the project's pdf-reader plugin to actually read PDF contents.
 allowed-tools: Bash(python3 -c *), Bash(python3 - *), Bash(python3 *)
 ---
 
-# Dubai Public Reports — DHA / DEWA / DET
+# Dubai Public Reports — DHA / DEWA / DET / DSC
 
-Three Dubai government bodies publish report PDFs on their public sites. None offers an API. This skill provides discovery helpers (enumerate available reports) and a unified fetcher that handles each site's quirks:
+Four Dubai government bodies publish report PDFs on their public sites. None offers an API. This skill provides discovery helpers (enumerate available reports) and a unified fetcher that handles each site's quirks:
 
 - **DHA** (`dha.gov.ae/en/open-data`) — direct PDFs, URL-encode spaces
 - **DEWA** (`dewa.gov.ae/-/media/Files/...`) — Sitecore `.ashx` media handlers; requires `Referer` header (anti-hotlink)
 - **DET** (`dubaidet.gov.ae/en/research-and-insights/...`) — slug-based HTML pages; content JS-rendered (this skill returns the URLs; agent / pdf-reader plugin handles rendering)
+- **DSC** (`dsc.gov.ae`) — Dubai Statistics Center: Statistical Yearbook chapter PDFs and standalone publications. **Geo-blocked outside UAE** — routed through Wayback Machine, snapshots typically 2–8 weeks old (publication lag dominates Wayback lag since DSC publishes monthly/quarterly).
 
 For the highest-cadence DEWA data, use `list_dewa_ir_reports()` — DEWA PJSC is on DFM and files quarterly financials with ~45-day lag (much fresher than the biennial Annual Statistics booklet).
 
@@ -228,11 +229,109 @@ def list_det_tourism_reports(start_year: int = 2024, end_year: int = 2026) -> li
                 time.sleep(0.4)
     return out
 
+# ---------- DSC (Dubai Statistics Center) via Wayback ----------
+
+# DSC is fully geo-blocked outside UAE. We route through Wayback Machine snapshots.
+# Direct browser-headers fetches return Akamai error pages; only Wayback works reliably.
+
+_DSC_HOST = "https://www.dsc.gov.ae"
+_WAYBACK  = "https://web.archive.org/web"
+
+DSC_STAT_YEARBOOK_TEMPLATE = "https://www.dsc.gov.ae/Report/DSC_SYB_{year}_{section:02d}_{chapter:02d}.pdf"
+DSC_PUBLICATION_TEMPLATE   = "https://www.dsc.gov.ae/Publication/{title}.pdf"
+
+# Curated DSC publication landing pages (use as Wayback discovery seeds)
+DSC_LANDING_PAGES = {
+    "publications_catalog":  "https://www.dsc.gov.ae/en-us/EServices/Pages/Display-or-Download-Statistical-Reports-and-Indicators.aspx",
+    "publication_details_8": "https://www.dsc.gov.ae/en-us/Publications/Pages/publication-details.aspx?PublicationId=8",
+    "international_trade":   "https://www.dsc.gov.ae/en-us/Themes/Pages/International-Trade.aspx?Theme=26",
+    "population":            "https://www.dsc.gov.ae/en-us/Themes/Pages/Population.aspx",
+}
+
+def _wayback_id(orig_url: str) -> tuple[str | None, str | None]:
+    """Resolve the latest Wayback snapshot URL for an original URL.
+    Returns (snapshot_url_with_id_, timestamp) or (None, None)."""
+    api = f"https://archive.org/wayback/available?url={urllib.parse.quote(orig_url, safe=':/?=&%')}"
+    with urllib.request.urlopen(api, timeout=15) as r:
+        snap = json.load(r).get("archived_snapshots", {}).get("closest", {})
+    if snap.get("available"):
+        ts = snap["timestamp"]
+        return (f"{_WAYBACK}/{ts}id_/{orig_url}", ts)
+    return (None, None)
+
+def fetch_dsc_pdf_via_wayback(original_url: str, *, max_bytes: int = 50_000_000) -> dict:
+    """Fetch a DSC PDF through the latest Wayback snapshot. Bypasses the UAE geo-block.
+    Returns {bytes, is_pdf, snapshot_timestamp, snapshot_url, original_url}."""
+    wb, ts = _wayback_id(original_url)
+    if not wb:
+        raise RuntimeError(f"No Wayback snapshot for {original_url}")
+    req = urllib.request.Request(wb, headers={"User-Agent": "Mozilla/5.0 (compatible; AxionAgent/1.0)"})
+    resp = _open_with_retry(req, timeout=45)
+    data = resp.read(max_bytes)
+    return {
+        "bytes": data, "is_pdf": data[:4] == b"%PDF",
+        "snapshot_timestamp": ts, "snapshot_url": wb,
+        "original_url": original_url, "size": len(data),
+    }
+
+def cache_dsc_pdf(original_url: str) -> str:
+    """Download a DSC PDF via Wayback to /data/dubai-public-reports/. Returns local path."""
+    os.makedirs(_CACHE_DIR, exist_ok=True)
+    fname = re.sub(r"[^A-Za-z0-9._-]+", "_", original_url.split("/")[-1])[:120]
+    if not fname.endswith(".pdf"): fname += ".pdf"
+    path = f"{_CACHE_DIR}/{fname}"
+    if os.path.exists(path) and os.path.getsize(path) > 1000:
+        return path
+    r = fetch_dsc_pdf_via_wayback(original_url)
+    if not r["is_pdf"]:
+        raise RuntimeError(f"Wayback returned non-PDF for {original_url} (size {r['size']})")
+    with open(path, "wb") as f: f.write(r["bytes"])
+    return path
+
+def discover_dsc_pdfs_via_wayback(landing_page_key: str = "publications_catalog") -> list[str]:
+    """Scrape a DSC landing-page snapshot from Wayback and extract PDF URLs.
+    Accepts a key from DSC_LANDING_PAGES or a raw DSC URL. Uses Firecrawl on the
+    Wayback URL since the snapshot pages can be heavy. Requires FIRECRAWL_API_KEY."""
+    import os as _os
+    fc_key = _os.environ.get("FIRECRAWL_API_KEY")
+    if not fc_key:
+        raise RuntimeError("FIRECRAWL_API_KEY required for DSC Wayback landing-page discovery.")
+    orig = DSC_LANDING_PAGES.get(landing_page_key, landing_page_key)
+    wb, ts = _wayback_id(orig)
+    if not wb:
+        return []
+    body = {"url": wb, "formats": ["rawHtml"], "timeout": 110_000}
+    req = urllib.request.Request(
+        "https://api.firecrawl.dev/v1/scrape",
+        data=json.dumps(body).encode(),
+        headers={"Authorization": f"Bearer {fc_key}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=120) as r:
+        resp = json.loads(r.read().decode())
+    html = (resp.get("data") or {}).get("rawHtml") or ""
+    pdfs = sorted(set(re.findall(
+        r'(?:dsc\.gov\.ae)?(/Report/[^"\'<>]+\.pdf|/Publication/[^"\'<>]+\.pdf)', html)))
+    return [f"{_DSC_HOST}{p}" if p.startswith("/") else p for p in pdfs]
+
+def list_dsc_yearbook_chapters(year: int = 2024, max_section: int = 20, max_chapter: int = 20) -> list[str]:
+    """Enumerate Dubai Statistical Yearbook PDF URLs by template.
+    Naming: DSC_SYB_{YEAR}_{section:02}_{chapter:02}.pdf. Sections cover Population, Vital Stats,
+    Education, Health, Labour, Economy, Trade, etc. (1 per major theme); chapters are sub-tables.
+    Probe each URL with `_wayback_id()` to see which are indexed."""
+    out = []
+    for sec in range(1, max_section + 1):
+        for ch in range(1, max_chapter + 1):
+            out.append(DSC_STAT_YEARBOOK_TEMPLATE.format(year=year, section=sec, chapter=ch))
+    return out
+
 # ---------- Convenience aggregator ----------
 
 def list_all_reports() -> dict:
     """Run every discovery helper and return a dict by source.
-    Pacing built in (per-helper sleeps); takes ~30-60s for a fresh enumeration."""
+    Pacing built in (per-helper sleeps); takes ~30-60s for a fresh enumeration.
+    DSC discovery skipped here (requires Firecrawl + Wayback probing) — call
+    discover_dsc_pdfs_via_wayback() explicitly when needed."""
     return {
         "dha": list_dha_pdfs(),
         "dewa_annual_stats": list_dewa_annual_stats(),
@@ -280,6 +379,31 @@ for r in latest:
     print(f"  {r['title'][:60]:<60} → {r['url']}")
 ```
 
+### Discover Dubai Statistical Yearbook chapters (DSC via Wayback)
+
+```python
+# Probe known yearbook chapter URLs against Wayback to see which are indexed
+candidates = list_dsc_yearbook_chapters(year=2024, max_section=10, max_chapter=10)
+found = []
+for url in candidates[:30]:  # cap probe to avoid Wayback rate limits
+    wb, ts = _wayback_id(url)
+    if wb:
+        found.append({"url": url, "wayback_ts": ts})
+        time.sleep(0.3)
+print(f"Found {len(found)} indexed yearbook chapters")
+for f in found[:10]:
+    fname = f["url"].split("/")[-1]
+    print(f"  {f['wayback_ts']}  {fname}")
+```
+
+### Read a DSC PDF (Wayback bypass for the geo-block)
+
+```python
+path = cache_dsc_pdf("https://www.dsc.gov.ae/Report/DSC_SYB_2024_01_01.pdf")
+print(f"Cached at {path}")
+# Agent step: pass `path` to pdf-reader.js plugin to extract text
+```
+
 ### Full survey of what's available right now
 
 ```python
@@ -293,10 +417,11 @@ for source, items in all_reports.items():
 
 ## Notes
 
-- **Three different bot-detection regimes:**
+- **Four different bot-detection regimes:**
   - DHA: lenient — any sensible UA works.
   - DEWA: Akamai with `Referer` check on media handlers. Full browser fingerprint headers required. `Referer` must point to a DEWA page or you get 403.
   - DET: Akamai with stricter checks. Static slug HTML pages load with full browser fingerprint, but content is JS-rendered (Highcharts/SPA). This skill returns slug URLs; rendering is out-of-scope.
+  - DSC: **fully geo-blocked outside UAE**. Direct browser-headers fetches return Akamai error pages. We route through Wayback Machine snapshots (`fetch_dsc_pdf_via_wayback`, `cache_dsc_pdf`). Snapshots are typically 2–8 weeks old, but DSC publishes monthly/quarterly anyway so publication lag dominates.
 - **DEWA cadence is biennial, not annual** — Annual Statistics booklets exist for 2019, 2021, 2023. 2025 booklet expected late 2025/early 2026 but not yet at the verified URL pattern. The *real* fresh DEWA data lives in `list_dewa_ir_reports()` — quarterly + annual financials.
 - **DEWA URL year is the publication year**, sometimes shifted by one from the data year. The 2023 booklet may contain 2022 data, etc. Check the cover page / first paragraph of each PDF.
 - **DET tourism reports' content is JS-rendered** — the static HTML returned by `_fetch_html()` is mostly the SPA shell + nav. To read actual visitor numbers, hand the URL to the `web-browser` skill (Playwright) or to a human/browser.
@@ -304,4 +429,5 @@ for source, items in all_reports.items():
 - **Caching:** `cache_report()` writes to `/data/dubai-public-reports/` keyed by sanitized filename. PDFs are large (5–10 MB common); be selective about what you cache in a single session.
 - **Rate-limit pacing:** `list_*` helpers include short `time.sleep()` between probes to avoid tripping Akamai rate limits. Don't remove them.
 - **Retry-on-429/5xx** is built into `_open_with_retry`. Doesn't retry 401/403 — those are caller errors (wrong Referer, blocked UA).
+- **DSC URL patterns:** `Report/DSC_SYB_{year}_{section:02d}_{chapter:02d}.pdf` for Statistical Yearbook chapter PDFs (Population, Vital Stats, Education, Health, Labour, Economy, Trade, etc.). `Publication/{title}.pdf` for standalone reports — titles contain spaces, URL-encode them. Use `discover_dsc_pdfs_via_wayback()` for catalogue scraping; that helper requires `FIRECRAWL_API_KEY`. `cache_dsc_pdf()` and `fetch_dsc_pdf_via_wayback()` need only Wayback (no key).
 - **Pair with `plugins/pdf-reader.js`** to actually read PDF content. This skill returns URLs and bytes; PDF-to-text extraction lives in the pdf-reader plugin.
