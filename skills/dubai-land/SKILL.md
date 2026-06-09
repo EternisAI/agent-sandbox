@@ -21,7 +21,7 @@ _CACHE_DIR     = "/data/dubai-land"
 _CACHE_FILE    = f"{_CACHE_DIR}/consumer-id.txt"
 
 def _ua_headers():
-    return {"User-Agent": "Mozilla/5.0 (dubai-land-skill/1.0)"}
+    return {"User-Agent": "Mozilla/5.0 (compatible; AxionAgent/1.0)"}
 
 def _open_with_retry(req, *, max_retries: int = 3, base_delay: float = 1.0, timeout: int = 30):
     """urlopen with retry on 429, 5xx, and network timeouts. Does NOT retry 401/403 —

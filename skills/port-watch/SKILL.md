@@ -47,7 +47,7 @@ def _query(layer: str, where: str = "1=1", out_fields: str = "*",
     if order_by:
         params["orderByFields"] = order_by
     url = LAYERS[layer] + "?" + urllib.parse.urlencode(params)
-    req = urllib.request.Request(url, headers={"User-Agent": "opencode-portwatch-client/1.0"})
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; AxionAgent/1.0)"})
     with urllib.request.urlopen(req, timeout=20) as r:
         data = json.loads(r.read().decode())
     if "error" in data:

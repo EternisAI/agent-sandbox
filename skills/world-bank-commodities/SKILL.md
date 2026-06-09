@@ -35,7 +35,7 @@ def _discover_doc_id() -> str:
     if cf.exists() and cf.stat().st_mtime > time.time() - 86400:
         return cf.read_text().strip()
     try:
-        req = urllib.request.Request(LANDING, headers={"User-Agent": "opencode-wb-client/1.0"})
+        req = urllib.request.Request(LANDING, headers={"User-Agent": "Mozilla/5.0 (compatible; AxionAgent/1.0)"})
         with urllib.request.urlopen(req, timeout=15) as r:
             html = r.read().decode("utf-8", errors="ignore")
         m = re.search(r"/doc/([a-f0-9]+-\d+)/related/CMO-Historical-Data-Monthly\.xlsx", html)
@@ -56,7 +56,7 @@ def _download_pink_sheet(period: str = "monthly") -> Path:
     if out.exists() and out.stat().st_size > 50_000:
         return out
     url = f"{DOC_BASE}/{doc_id}/related/{fname}"
-    req = urllib.request.Request(url, headers={"User-Agent": "opencode-wb-client/1.0"})
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; AxionAgent/1.0)"})
     with urllib.request.urlopen(req, timeout=45) as r:
         out.write_bytes(r.read())
     return out

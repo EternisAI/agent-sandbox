@@ -25,7 +25,7 @@ def _get(url: str, *, max_retries: int = 3, base_delay: float = 1.0) -> dict:
     last_err = None
     for attempt in range(max_retries + 1):
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "uae-macro-skill/1.0"})
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; AxionAgent/1.0)"})
             with urllib.request.urlopen(req, timeout=20) as r:
                 return json.loads(r.read().decode())
         except urllib.error.HTTPError as e:
@@ -67,7 +67,7 @@ WB_BASE  = "https://api.worldbank.org/v2"
 IMF_BASE = "https://www.imf.org/external/datamapper/api/v1"
 
 def _get(url: str) -> dict:
-    req = urllib.request.Request(url, headers={"User-Agent": "uae-macro-skill/1.0"})
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; AxionAgent/1.0)"})
     with urllib.request.urlopen(req, timeout=20) as r:
         return json.loads(r.read().decode())
 

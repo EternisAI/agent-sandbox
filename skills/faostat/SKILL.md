@@ -44,12 +44,14 @@ def _decode_exp(jwt: str) -> int:
     payload_b64 += "=" * ((4 - len(payload_b64) % 4) % 4)
     return json.loads(base64.b64decode(payload_b64))["exp"]
 
+UA = "Mozilla/5.0 (compatible; AxionAgent/1.0)"
+
 def _login() -> dict:
     user = os.environ["FAOSTAT_USERNAME"]
     pw = os.environ["FAOSTAT_PASSWORD"]
     body = urllib.parse.urlencode({"username": user, "password": pw}).encode()
     req = urllib.request.Request(LOGIN_URL, data=body, method="POST",
-        headers={"Content-Type": "application/x-www-form-urlencoded"})
+        headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": UA})
     with urllib.request.urlopen(req, timeout=15) as r:
         return json.loads(r.read().decode())["AuthenticationResult"]
 
@@ -62,6 +64,7 @@ def _refresh(refresh_token: str) -> dict:
     req = urllib.request.Request(COGNITO_URL, data=body, method="POST", headers={
         "Content-Type": "application/x-amz-json-1.1",
         "X-Amz-Target": "AWSCognitoIdentityProviderService.InitiateAuth",
+        "User-Agent": UA,
     })
     with urllib.request.urlopen(req, timeout=15) as r:
         return json.loads(r.read().decode())["AuthenticationResult"]
@@ -111,7 +114,7 @@ def faostat_get(path: str, params: dict = None) -> dict:
     params = params or {}
     qs = urllib.parse.urlencode(params)
     url = f"{API_BASE}/{path.lstrip('/')}" + (f"?{qs}" if qs else "")
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "User-Agent": UA})
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.loads(r.read().decode())
 ```

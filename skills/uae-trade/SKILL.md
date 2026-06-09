@@ -30,7 +30,7 @@ def _get(path_after_get: str, params: dict, *, max_retries: int = 4, base_delay:
     429 responses include a Retry-After header which we honour. Keyed tier is ~5/sec."""
     base = _BASE_KEYED if _KEY else _BASE_PUBLIC
     url = f"{base}/{path_after_get}?{urllib.parse.urlencode(params)}"
-    headers = {"User-Agent": "uae-trade-skill/1.0"}
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; AxionAgent/1.0)"}
     if _KEY:
         headers["Ocp-Apim-Subscription-Key"] = _KEY
     last_err = None
@@ -87,7 +87,7 @@ _BASE_PUBLIC = "https://comtradeapi.un.org/public/v1/preview"
 def _get(path_after_get: str, params: dict, *, max_retries: int = 4, base_delay: float = 1.0) -> dict:
     base = _BASE_KEYED if _KEY else _BASE_PUBLIC
     url = f"{base}/{path_after_get}?{urllib.parse.urlencode(params)}"
-    headers = {"User-Agent": "uae-trade-skill/1.0"}
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; AxionAgent/1.0)"}
     if _KEY:
         headers["Ocp-Apim-Subscription-Key"] = _KEY
     last_err = None
