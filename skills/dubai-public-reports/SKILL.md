@@ -257,6 +257,7 @@ def fetch_det_report(url: str, *, format: str = "markdown", wait_ms: int = 4000,
         headers={
             "Authorization": f"Bearer {os.environ['PROXY_API_KEY']}",
             "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (compatible; AxionAgent/1.0)",
         },
         method="POST",
     )
@@ -344,6 +345,7 @@ def discover_dsc_pdfs_via_wayback(landing_page_key: str = "publications_catalog"
         headers={
             "Authorization": f"Bearer {_os.environ['PROXY_API_KEY']}",
             "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (compatible; AxionAgent/1.0)",
         },
         method="POST",
     )

@@ -53,6 +53,7 @@ def _firecrawl_scrape(url: str, *, timeout_s: int = 120, formats: list[str] | No
         headers={
             "Authorization": f"Bearer {os.environ['PROXY_API_KEY']}",
             "Content-Type": "application/json",
+            "User-Agent": _UA,
         },
         method="POST",
     )
