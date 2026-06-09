@@ -204,8 +204,9 @@ _MONTHS_ABBR = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov
 def list_det_tourism_reports(start_year: int = 2024, end_year: int = 2026) -> list[dict]:
     """Enumerate DET monthly Tourism Performance Report slugs. Returns verified (HTTP 200) URLs only.
     Probes both 'january' and 'jan' month forms — DET appears to have switched to full names ~2025.
-    Note: report HTML pages are JS-rendered; this returns the URL for the agent to read separately
-    (e.g. via the web-browser skill or a PDF viewer once the embedded PDF link is located)."""
+    Note: report HTML pages are JS-rendered (Highcharts SPA). To read the actual content
+    (visitor numbers, charts, narrative), call `fetch_det_report(url)` — DO NOT pass the raw
+    URL to a plain HTTP fetcher; you will only get the SPA shell."""
     out = []
     for y in range(start_year, end_year + 1):
         for mf, ma in zip(_MONTHS_FULL, _MONTHS_ABBR):
@@ -220,7 +221,7 @@ def list_det_tourism_reports(start_year: int = 2024, end_year: int = 2026) -> li
                         out.append({"url": url, "slug": slug, "year": y, "month": mf,
                                     "kind": "tourism_performance",
                                     "referer": _DET_REF,
-                                    "render_required": True})
+                                    "needs_firecrawl": True})  # call fetch_det_report() to render
                         break  # don't try the abbr form if full worked
                 except urllib.error.HTTPError as e:
                     if e.code != 404:
@@ -228,6 +229,41 @@ def list_det_tourism_reports(start_year: int = 2024, end_year: int = 2026) -> li
                         pass
                 time.sleep(0.4)
     return out
+
+def fetch_det_report(url: str, *, format: str = "markdown", wait_ms: int = 4000,
+                     timeout_s: int = 90) -> str:
+    """Fetch a DET tourism report's RENDERED content via Firecrawl. DET pages are JS-rendered
+    (Highcharts SPA), so plain HTTP returns the SPA shell only. This helper hands the URL to
+    Firecrawl with a wait for the Highcharts hydration and returns the rendered body.
+
+    `format`: 'markdown' (default — best for LLM ingestion) or 'rawHtml' (post-render DOM).
+    `wait_ms`: how long Firecrawl waits after page load before serializing. DET charts hydrate
+               in 2-3s; default 4000ms gives margin.
+
+    Requires FIRECRAWL_API_KEY. Returns the rendered body as a string.
+
+    Use this — DO NOT fetch DET URLs with `fetch_report()` or `_fetch_html()`; both return SPA shell."""
+    fc_key = os.environ.get("FIRECRAWL_API_KEY")
+    if not fc_key:
+        raise RuntimeError("FIRECRAWL_API_KEY required to render DET pages (JS-rendered SPA).")
+    body = {
+        "url": url,
+        "formats": [format],
+        "waitFor": wait_ms,
+        "timeout": (timeout_s - 10) * 1000,
+    }
+    req = urllib.request.Request(
+        "https://api.firecrawl.dev/v1/scrape",
+        data=json.dumps(body).encode(),
+        headers={"Authorization": f"Bearer {fc_key}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout_s) as r:
+        resp = json.loads(r.read().decode())
+    if not resp.get("success"):
+        raise RuntimeError(f"Firecrawl failed for {url}: {resp.get('error','no error msg')[:200]}")
+    data = resp.get("data") or {}
+    return data.get(format) or data.get("markdown") or data.get("rawHtml") or ""
 
 # ---------- DSC (Dubai Statistics Center) via Wayback ----------
 
@@ -355,15 +391,16 @@ for r in fy2025:
     print(f"    cached to {path} ({os.path.getsize(path):,} bytes)")
 ```
 
-### Latest DET tourism perf report
+### Latest DET tourism perf report (rendered)
 
 ```python
 det = list_det_tourism_reports(start_year=2025, end_year=2026)
 det_sorted = sorted(det, key=lambda r: (r["year"], _MONTHS_FULL.index(r["month"])))
 latest = det_sorted[-1]
 print(f"Latest DET tourism report: {latest['slug']}")
-print(f"  URL: {latest['url']}")
-print(f"  Render required: {latest['render_required']}  (use web-browser skill for content)")
+# Render the JS SPA via Firecrawl and return markdown
+body = fetch_det_report(latest["url"], format="markdown")
+print(body[:2000])  # first 2K chars of the rendered body
 ```
 
 ### DHA most-recent health publication
@@ -420,11 +457,11 @@ for source, items in all_reports.items():
 - **Four different bot-detection regimes:**
   - DHA: lenient — any sensible UA works.
   - DEWA: Akamai with `Referer` check on media handlers. Full browser fingerprint headers required. `Referer` must point to a DEWA page or you get 403.
-  - DET: Akamai with stricter checks. Static slug HTML pages load with full browser fingerprint, but content is JS-rendered (Highcharts/SPA). This skill returns slug URLs; rendering is out-of-scope.
+  - DET: Akamai with stricter checks. Static slug HTML pages load with full browser fingerprint, but content is JS-rendered (Highcharts/SPA). Use `fetch_det_report(url)` to get the rendered body via Firecrawl — do NOT pass DET URLs to `fetch_report()` or `_fetch_html()`; both return only the SPA shell.
   - DSC: **fully geo-blocked outside UAE**. Direct browser-headers fetches return Akamai error pages. We route through Wayback Machine snapshots (`fetch_dsc_pdf_via_wayback`, `cache_dsc_pdf`). Snapshots are typically 2–8 weeks old, but DSC publishes monthly/quarterly anyway so publication lag dominates.
 - **DEWA cadence is biennial, not annual** — Annual Statistics booklets exist for 2019, 2021, 2023. 2025 booklet expected late 2025/early 2026 but not yet at the verified URL pattern. The *real* fresh DEWA data lives in `list_dewa_ir_reports()` — quarterly + annual financials.
 - **DEWA URL year is the publication year**, sometimes shifted by one from the data year. The 2023 booklet may contain 2022 data, etc. Check the cover page / first paragraph of each PDF.
-- **DET tourism reports' content is JS-rendered** — the static HTML returned by `_fetch_html()` is mostly the SPA shell + nav. To read actual visitor numbers, hand the URL to the `web-browser` skill (Playwright) or to a human/browser.
+- **DET tourism reports' content is JS-rendered** — `_fetch_html()` returns only the SPA shell + nav. Use `fetch_det_report(url)` instead, which renders via Firecrawl (`waitFor=4000ms` for Highcharts hydration) and returns the actual visitor numbers / narrative. Requires `FIRECRAWL_API_KEY`.
 - **Filename → year extraction is heuristic** — relies on a `20\d{2}` regex match. Some filenames omit the year; consult the cover page for definitive data year.
 - **Caching:** `cache_report()` writes to `/data/dubai-public-reports/` keyed by sanitized filename. PDFs are large (5–10 MB common); be selective about what you cache in a single session.
 - **Rate-limit pacing:** `list_*` helpers include short `time.sleep()` between probes to avoid tripping Akamai rate limits. Don't remove them.
