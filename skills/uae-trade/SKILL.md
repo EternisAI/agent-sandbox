@@ -1,6 +1,6 @@
 ---
 name: uae-trade
-description: Fetch UAE international trade data. Default backend is FCSC's UAE.Stat SDMX API — monthly through Sept 2025, includes **re-exports by country** (the Dubai re-export economy view), monthly exports/imports by partner, HS section monthly. UN Comtrade is the fallback for HS6 commodity drill-down and multi-country comparison (Comtrade is multilateral; FCSC is UAE-reporter-only). Both backends are reached through the backend proxy (`PROXY_BASE_URL` / `PROXY_API_KEY`): FCSC via Firecrawl (Cloudflare WAF on the SDMX host), Comtrade via the keyed proxy with graceful fallback to the unauthenticated public endpoint. Pre-scoped to UAE (reporterCode 784 / REF_AREA AE).
+description: Fetch UAE international trade data. Default backend is FCSC's UAE.Stat SDMX API — monthly through Sept 2025, includes **re-exports by country** (the Dubai re-export economy view), monthly exports/imports by partner, and HS section breakdowns by trade type (annual; FCSC does not publish monthly HS-section data). UN Comtrade is the fallback for HS6 commodity drill-down and multi-country comparison (Comtrade is multilateral; FCSC is UAE-reporter-only). Both backends are reached through the backend proxy (`PROXY_BASE_URL` / `PROXY_API_KEY`): FCSC via Firecrawl (Cloudflare WAF on the SDMX host), Comtrade via the keyed proxy with graceful fallback to the unauthenticated public endpoint. Pre-scoped to UAE (reporterCode 784 / REF_AREA AE).
 allowed-tools: Bash(python3 -c *), Bash(python3 - *), Bash(python3 *)
 ---
 
@@ -12,7 +12,9 @@ UAE-scoped trade data from two complementary sources. **FCSC is the default** �
 
 | Question | Backend | Why |
 |---|---|---|
-| Latest UAE monthly trade (totals, by partner, by HS section) | **FCSC** | Through Sept 2025; Comtrade has only 2023 annual |
+| Latest UAE monthly trade (totals, by partner) | **FCSC** | Through Sept 2025; Comtrade has only 2023 annual |
+| UAE trade by HS section + partner (annual) | **FCSC** | `DF_TRADE_{TOT,EXP,IMP,REXP}_SECT_YR` — pick by trade type. Monthly HS-section is not published by FCSC (the registered `DF_TRADE_SECT_MTH` is empty). |
+| Monthly HS chapter / commodity detail | **Comtrade** | FCSC has no monthly HS-section feed; Comtrade's `top_commodities_comtrade()` gives HS2 chapters annually (UAE reports annually only). |
 | UAE re-exports by partner country | **FCSC** | `DF_TRADE_REXP_COUNTRY_MTH` monthly; Comtrade re-export tracking needs paid premium |
 | UAE annual trade by partner | **FCSC** | 2024 annual published; Comtrade lags 2 years |
 | UAE trade composition at HS4 / HS6 (specific commodities) | **Comtrade** | FCSC carries HS section/chapter only |
@@ -68,13 +70,19 @@ def _firecrawl_scrape(url: str, *, timeout_s: int = 120, formats: list[str] | No
 
 ```python
 TRADE_DATAFLOWS = {
-    # Annual
+    # Annual — totals + HS-section breakdowns by trade type. The monthly HS-section
+    # flow (DF_TRADE_SECT_MTH) is registered by FCSC but never populated — every
+    # window returns NoResultsFound. Use the four annual SECT_YR flows below for
+    # HS-section granularity; for monthly chapter detail fall back to Comtrade.
     "DF_TRADE_TOT_YR":           {"version": "5.1.0", "freq": "A", "label": "UAE Foreign Trade — Annual"},
     "DF_TRADE_TOT_CHAP_YR":      {"version": "5.1.0", "freq": "A", "label": "Foreign Trade — HS Chapter, Annual"},
     "DF_TRADE_COUNTRY_YR":       {"version": "5.1.0", "freq": "A", "label": "Foreign Trade — by Country, Annual"},
+    "DF_TRADE_TOT_SECT_YR":      {"version": "5.1.0", "freq": "A", "label": "Total Non-Oil Trade by HS Section + Country, Annual"},
+    "DF_TRADE_EXP_SECT_YR":      {"version": "5.1.0", "freq": "A", "label": "Non-Oil Exports by HS Section + Country, Annual"},
+    "DF_TRADE_IMP_SECT_YR":      {"version": "5.1.0", "freq": "A", "label": "Imports by HS Section + Country, Annual"},
+    "DF_TRADE_REXP_SECT_YR":     {"version": "5.1.0", "freq": "A", "label": "Re-Exports by HS Section + Country, Annual"},
     # Monthly (the freshness wins — through Sept 2025)
     "DF_TRADE_TOT_MTH":          {"version": "5.1.0", "freq": "M", "label": "Foreign Trade — Monthly"},
-    "DF_TRADE_SECT_MTH":         {"version": "5.1.0", "freq": "M", "label": "Foreign Trade — HS Section, Monthly"},
     "DF_TRADE_TOT_COUNTRY_MTH":  {"version": "5.1.0", "freq": "M", "label": "Total Non-Oil Trade by Country, Monthly"},
     "DF_TRADE_EXP_COUNTRY_MTH":  {"version": "5.1.0", "freq": "M", "label": "Non-Oil Exports by Country, Monthly"},
     "DF_TRADE_IMP_COUNTRY_MTH":  {"version": "5.1.0", "freq": "M", "label": "Imports by Country, Monthly"},
@@ -159,12 +167,35 @@ def get_uae_imports_by_country_monthly(start_month: str = "2025-01",
     return parse_sdmx_csv(get_uaestat_data("DF_TRADE_IMP_COUNTRY_MTH",
                                            start_period=start_month, end_period=end_month))
 
-def get_uae_trade_by_hs_section_monthly(start_month: str = "2025-01",
-                                         end_month: str | None = None) -> list[dict]:
-    """UAE trade by HS section, monthly. HS section ≈ 22 broad groupings (e.g. machinery, mineral fuels).
-    For HS4/HS6 commodity detail use the Comtrade backend (see Part 2)."""
-    return parse_sdmx_csv(get_uaestat_data("DF_TRADE_SECT_MTH",
-                                           start_period=start_month, end_period=end_month))
+_HS_SECTION_FLOWS = {
+    "total":    "DF_TRADE_TOT_SECT_YR",   # Total non-oil trade
+    "exports":  "DF_TRADE_EXP_SECT_YR",   # Non-oil exports
+    "imports":  "DF_TRADE_IMP_SECT_YR",   # Imports
+    "reexports": "DF_TRADE_REXP_SECT_YR", # Re-exports (Dubai re-export economy)
+}
+
+
+def get_uae_trade_by_hs_section_annual(trade_type: str = "total",
+                                       start_year: str | None = "2020",
+                                       end_year: str | None = None) -> list[dict]:
+    """UAE trade by HS section, annual. HS section ≈ 22 broad groupings (e.g.
+    machinery, mineral fuels). `trade_type` selects the flow:
+        "total"     → DF_TRADE_TOT_SECT_YR  (total non-oil trade)
+        "exports"   → DF_TRADE_EXP_SECT_YR  (non-oil exports)
+        "imports"   → DF_TRADE_IMP_SECT_YR
+        "reexports" → DF_TRADE_REXP_SECT_YR (Dubai re-export economy)
+
+    Each flow carries HS section × partner country observations and returns
+    12k+ rows per call — always pass a tight start_year/end_year window.
+
+    NOTE: there is NO monthly equivalent at FCSC — the registered
+    `DF_TRADE_SECT_MTH` dataflow is empty (returns NoResultsFound for any
+    window). For monthly chapter-level commodity detail, fall back to
+    `top_commodities_comtrade()` (HS2 chapter, annual UAE coverage)."""
+    if trade_type not in _HS_SECTION_FLOWS:
+        raise ValueError(f"trade_type must be one of {list(_HS_SECTION_FLOWS)}; got {trade_type!r}")
+    return parse_sdmx_csv(get_uaestat_data(_HS_SECTION_FLOWS[trade_type],
+                                           start_period=start_year, end_period=end_year))
 ```
 
 ---
@@ -410,7 +441,7 @@ for y in sorted(exp.keys()):
 - **Period syntax (SDMX):** annual `YYYY` (e.g. `"2024"`); monthly `YYYY-MM` (e.g. `"2025-09"`); quarterly `YYYY-Q{1-4}`. `startPeriod`/`endPeriod` work for all.
 - **Re-export endpoint is heavy** — `DF_TRADE_REXP_COUNTRY_MTH` full history is ~7MB CSV. Always pass `start_period` / `end_period` to scope.
 - **CSV columns vary by dataflow** — always inspect `csv.DictReader` field names from a small sample first, then write column-specific extraction. Common keys: `TIME_PERIOD`, `OBS_VALUE`, `REF_AREA`, `Counterpart area`, `MEASURE`, `UNIT_MEASURE`.
-- **Granularity ceiling:** FCSC carries HS section / chapter (annual). For HS4/HS6, go to Comtrade.
+- **Granularity ceiling:** FCSC carries HS section and HS chapter at **annual** frequency only — the registered monthly HS-section dataflow (`DF_TRADE_SECT_MTH`) is empty. For HS4/HS6 commodity detail, or for any sub-annual chapter view, go to Comtrade.
 - **Firecrawl is rate-limited** — serialize requests; insert `time.sleep(1)` between probes if iterating.
 
 ### Comtrade

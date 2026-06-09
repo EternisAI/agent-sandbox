@@ -31,22 +31,56 @@ CBUAE publishes monthly XLSX bulletins covering UAE monetary aggregates, the cen
 
 | Surface | Direct urllib | Notes |
 |---|---|---|
-| `/en/research-and-statistics/` and per-month landing pages | ❌ Cloudflare-gated (HTTP 403) | Must go through `firecrawl_scrape_page` to discover current XLSX URLs |
+| `/en/research-and-statistics/` and per-month landing pages | ❌ Cloudflare-gated (HTTP 403) | Routed through the backend Firecrawl proxy (`PROXY_BASE_URL` / `PROXY_API_KEY`). No vendor key in the sandbox. |
 | `/media/<hash>/<file>.xlsx` and `/media/<hash>/<file>.pdf` | ✅ Public (HTTP 200) | Direct urllib download works, no auth, no UA tricks needed |
 
-**Implication:** the agent uses the existing `firecrawl_scrape_page` MCP tool ONCE per session to get current bulletin URLs, then this skill's Python helpers download and parse the XLSX files directly.
+**Implication:** call `fetch_bulletin_index()` ONCE per session to discover the current bulletin URLs (the helper proxies a `rawHtml` scrape and parses it into `{dataset: [{month, xlsx_url, pdf_url}]}`), then call `download_bulletin(xlsx_url)` directly on each XLSX URL.
 
-**Critical Firecrawl format note.** When calling `firecrawl_scrape_page` on the CBUAE landing page, you MUST pass `formats: ["rawHtml"]`. The default `markdown` format strips the `<a href="...">` tags entirely on this site — Firecrawl returns dataset names as headings but with no XLSX URLs, because the file links are rendered through JavaScript filters that the markdown serializer drops. Verified live: `markdown` returns 0 XLSX URLs, `rawHtml` returns all 9. Pass `rawHtml` to the parser below.
+**Why `rawHtml`, not `markdown`.** The CBUAE landing page renders dataset file links through JavaScript filters that Firecrawl's `markdown` serializer drops — `markdown` returns dataset names as headings but with no XLSX URLs. The skill's helper requests `rawHtml` for you; do not override.
 
 ## Helper
 
 ```python
+import json
+import os
 import urllib.request
 import openpyxl
 import io
 import re
 
 UA = "Mozilla/5.0 (compatible; AxionAgent/1.0)"
+
+
+def _firecrawl_proxy_base() -> str:
+    return os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/firecrawl-proxy")
+
+
+def _firecrawl_scrape(url: str, *, timeout_s: int = 120,
+                      formats: list[str] | None = None) -> str:
+    """Scrape via the backend Firecrawl proxy. Returns the page body as a
+    string (rawHtml by default). The CBUAE landing page needs `formats=
+    ["rawHtml"]` so the `<a href>` tags survive serialization."""
+    body = {
+        "url": url,
+        "formats": formats or ["rawHtml"],
+        "timeout": (timeout_s - 10) * 1000,
+    }
+    req = urllib.request.Request(
+        _firecrawl_proxy_base().rstrip("/") + "/v1/scrape",
+        data=json.dumps(body).encode(),
+        headers={
+            "Authorization": f"Bearer {os.environ['PROXY_API_KEY']}",
+            "Content-Type": "application/json",
+            "User-Agent": UA,
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout_s) as r:
+        resp = json.loads(r.read().decode())
+    if not resp.get("success"):
+        raise RuntimeError(f"Firecrawl failed for {url}: {resp.get('error','no error msg')[:200]}")
+    data = resp.get("data") or {}
+    return data.get("rawHtml") or data.get("markdown") or ""
 
 # Months → MM mapping shared across all date-normalization functions.
 _MONTH_MAP = {
@@ -86,13 +120,19 @@ def _normalize_date(label: str) -> str:
       'Feb-19'      → '2019-02'      (Banking Operations short form)
       'Apr 2025'    → '2025-04'      (Statistical Bulletin standard form)
       'Apr 2026 *'  → '2026-04'      (preliminary marker stripped)
-      'Q1 2026'     → '2026-Q1'      (Core FSI quarterly form)
+      'Q1 2026'     → '2026-Q1'      (Core FSI quarterly form, space-separated)
+      '2026Q1'      → '2026-Q1'      (Core FSI quarterly form, year-first)
       'Mar-26'      → '2026-03'      (some sheets)
 
     Unknown formats are returned unchanged so the caller can still see the original."""
     if not isinstance(label, str):
         return label
     s = label.strip().rstrip(" *")
+
+    # Year-first quarterly: '2026Q1' → '2026-Q1'
+    yq = re.match(r"^(\d{4})Q(\d)$", s, re.I)
+    if yq:
+        return f"{yq.group(1)}-Q{yq.group(2)}"
 
     # Quarterly: 'Q1 2026' or 'Q1-2026' → '2026-Q1'
     qm = re.match(r"^Q(\d)[\s-](\d{2,4})$", s, re.I)
@@ -144,7 +184,8 @@ def _resolve_sheet(wb, name: str) -> str:
 
 | Method | Purpose | Cost |
 | --- | --- | --- |
-| `parse_bulletin_index` | Extract current bulletin URLs from Firecrawl-scraped landing-page markdown | 0 (in-memory parse) |
+| `fetch_bulletin_index` | One-call discovery: scrape the landing page via the backend Firecrawl proxy and parse it into a `{dataset: [{month, xlsx_url, pdf_url}]}` index | 1 Firecrawl scrape |
+| `parse_bulletin_index` | Same parse step, on rawHtml you already have. Use when you have cached landing-page HTML; otherwise call `fetch_bulletin_index` | 0 (in-memory parse) |
 | `download_bulletin` | Fetch any `/media/<hash>/<file>.xlsx` URL into memory | 1 HTTP request |
 | `list_sheets` | List sheet names in a downloaded XLSX | 0 (in-memory) |
 | `read_series` | Extract a named indicator as `{date: value}` time series | 0 (in-memory) |
@@ -154,11 +195,18 @@ def _resolve_sheet(wb, name: str) -> str:
 ## Method signatures
 
 ```python
-def parse_bulletin_index(markdown_or_html: str) -> dict:
-    """Pass the markdown/HTML returned by firecrawl_scrape_page on the
-    /en/research-and-statistics/ landing page. Returns a dict of
+def fetch_bulletin_index() -> dict:
+    """Scrape https://www.centralbank.ae/en/research-and-statistics/ through
+    the backend Firecrawl proxy and parse the result. Returns the same
+    `{dataset: [{month, xlsx_url, pdf_url}]}` structure as parse_bulletin_index.
+    Call this ONCE per session, then download each XLSX directly."""
+
+def parse_bulletin_index(rawhtml: str) -> dict:
+    """Pure parser — pass rawHtml of the /en/research-and-statistics/ landing
+    page (the format the Firecrawl proxy returns). Returns a dict of
     {dataset_name: [{month: "April 2026", xlsx_url: "...", pdf_url: "..."}, ...]}
-    for each dataset CBUAE currently lists."""
+    for each dataset CBUAE currently lists. Most callers should use
+    fetch_bulletin_index() instead."""
 
 def download_bulletin(xlsx_url: str) -> bytes:
     """Direct fetch of a /media/<hash>/<file>.xlsx URL. Returns raw bytes
@@ -226,6 +274,8 @@ def read_full_history(xlsx_bytes: bytes, iso_dates: bool = True) -> dict[str, di
 ## Implementation
 
 ```python
+import json
+import os
 import urllib.request, urllib.parse
 import openpyxl
 import io
@@ -233,6 +283,35 @@ import re
 from typing import Optional
 
 UA = "Mozilla/5.0 (compatible; AxionAgent/1.0)"
+
+
+def _firecrawl_proxy_base() -> str:
+    return os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/firecrawl-proxy")
+
+
+def _firecrawl_scrape(url: str, *, timeout_s: int = 120,
+                      formats: list[str] | None = None) -> str:
+    body = {
+        "url": url,
+        "formats": formats or ["rawHtml"],
+        "timeout": (timeout_s - 10) * 1000,
+    }
+    req = urllib.request.Request(
+        _firecrawl_proxy_base().rstrip("/") + "/v1/scrape",
+        data=json.dumps(body).encode(),
+        headers={
+            "Authorization": f"Bearer {os.environ['PROXY_API_KEY']}",
+            "Content-Type": "application/json",
+            "User-Agent": UA,
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout_s) as r:
+        resp = json.loads(r.read().decode())
+    if not resp.get("success"):
+        raise RuntimeError(f"Firecrawl failed for {url}: {resp.get('error','no error msg')[:200]}")
+    data = resp.get("data") or {}
+    return data.get("rawHtml") or data.get("markdown") or ""
 
 
 def _fetch_bytes(url: str) -> bytes:
@@ -265,10 +344,23 @@ _DATASET_HINTS = {
 }
 
 
+_LANDING_URL = "https://www.centralbank.ae/en/research-and-statistics/"
+
+
+def fetch_bulletin_index() -> dict:
+    """One-call discovery: scrape the CBUAE research-and-statistics landing
+    page through the backend Firecrawl proxy and parse it into the bulletin
+    index. Returns the same shape as parse_bulletin_index()."""
+    rawhtml = _firecrawl_scrape(_LANDING_URL, formats=["rawHtml"])
+    return parse_bulletin_index(rawhtml)
+
+
 def parse_bulletin_index(markdown_or_html: str) -> dict:
     """Scan Firecrawl-scraped landing-page text for /media/ XLSX URLs and
     bucket them by dataset using filename patterns. Also pairs each XLSX with
-    its PDF sibling if both are present."""
+    its PDF sibling if both are present. Entries within each dataset are
+    sorted ascending by date so callers can use `entries[-1]` for the newest
+    bulletin regardless of URL-hash alphabetization."""
     text = markdown_or_html
     # Make URLs absolute. Some Firecrawl outputs strip the scheme; restore it.
     text = re.sub(r"(?<![:\w])(/media/[^\s\"')]+)", r"https://www.centralbank.ae\1", text)
@@ -291,11 +383,53 @@ def parse_bulletin_index(markdown_or_html: str) -> dict:
             seen_keys[name].add(key)
             # Find a matching PDF in the same dataset bucket (by key substring).
             pdf_match = next((p for p in pdf_urls if pat.search(p) and pat.search(p).group(1).lower() == key), None)
-            out[name].append({"month": _humanize_month(key), "xlsx_url": xlsx, "pdf_url": pdf_match})
+            out[name].append({"month": _humanize_month(key), "xlsx_url": xlsx, "pdf_url": pdf_match,
+                              "_sort_key": _bulletin_sort_key(key)})
             break
 
-    # Drop empty datasets.
-    return {k: v for k, v in out.items() if v}
+    # Sort each dataset ascending by real date so [-1] is the newest, then
+    # strip the internal _sort_key field. Without this the order is the
+    # alphabetical order of the random /media/<hash>/ prefixes.
+    result: dict = {}
+    for k, v in out.items():
+        if not v:
+            continue
+        v.sort(key=lambda e: e["_sort_key"])
+        for e in v:
+            del e["_sort_key"]
+        result[k] = v
+    return result
+
+
+_FILENAME_MONTHS = {
+    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
+    "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+
+
+def _bulletin_sort_key(filename_key: str) -> tuple:
+    """Convert the dataset-hint capture (e.g. 'april-2026', 'apr-26', 'q1-2026')
+    into a (year, month) tuple for ascending-by-date sorting."""
+    s = filename_key.lower()
+    # Quarter: 'q1-2026' → (2026, 3) [end-of-quarter month]
+    qm = re.match(r"q(\d)-?(\d{2,4})", s)
+    if qm:
+        y = int(qm.group(2))
+        if y < 100:
+            y += 2000
+        return (y, int(qm.group(1)) * 3)
+    # Month: 'april-2026' or 'apr-26' → (2026, 4)
+    fm = re.match(r"([a-z]+)-?(\d{2,4})", s)
+    if fm:
+        mon = _FILENAME_MONTHS.get(fm.group(1))
+        if mon:
+            y = int(fm.group(2))
+            if y < 100:
+                y += 2000
+            return (y, mon)
+    return (0, 0)
 
 
 def _humanize_month(key: str) -> str:
@@ -414,7 +548,11 @@ def read_series(xlsx_bytes: bytes, sheet_name: str, indicator: str,
         if not isinstance(header, str):
             continue
         h = _clean(header)
-        if not re.match(r"^(?:Q\d|\w{3,9})[\s-]?\d{2,4}", h):
+        # Accept three header shapes:
+        #   'Apr 2026' / 'Apr-26'      — monthly (Statistical Bulletin)
+        #   'Q1 2026'  / 'Q1-2026'     — quarterly, Q-first
+        #   '2026Q1'                   — quarterly, year-first (Core FSI)
+        if not re.match(r"^(?:\d{4}Q\d|Q\d[\s-]?\d{2,4}|\w{3,9}[\s-]?\d{2,4})", h):
             continue
         val = data_row[j] if j < len(data_row) else None
         if val is None:
@@ -424,17 +562,25 @@ def read_series(xlsx_bytes: bytes, sheet_name: str, indicator: str,
     return out
 
 
+_QUARTER_YEAR_RE = re.compile(r"^\d{4}Q\d$", re.I)
+
+
 def _detect_english_header_row(rows: list) -> int | None:
-    """Find the row index (1-based) whose cells most look like 'Apr 2025'-style English month tokens."""
+    """Find the row index (1-based) whose cells most look like date headers.
+    Recognises both 'Apr 2025'-style English month tokens and '2026Q1'-style
+    year-first quarterly tokens (Core FSI sheets)."""
     month_tokens = {"jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"}
     best = (0, None)
     for i, row in enumerate(rows[:12], start=1):
         score = 0
         for c in row:
-            if isinstance(c, str):
-                lo = c.strip().lower()
-                if lo[:3] in month_tokens and re.search(r"\d{2,4}", lo):
-                    score += 1
+            if not isinstance(c, str):
+                continue
+            lo = c.strip().lower()
+            if lo[:3] in month_tokens and re.search(r"\d{2,4}", lo):
+                score += 1
+            elif _QUARTER_YEAR_RE.match(c.strip()):
+                score += 1
         if score > best[0]:
             best = (score, i)
     return best[1] if best[0] >= 3 else None
@@ -463,18 +609,19 @@ def read_full_history(xlsx_bytes: bytes, iso_dates: bool = True) -> dict[str, di
     ws = wb[sn]
     rows = list(ws.iter_rows(values_only=True))
 
-    # Find the header rows: the GROUP-header row contains the "End of Month"
-    # label in some column; the SUB-header row immediately follows.
+    # Find the header rows: the GROUP-header row carries the date-column label;
+    # the SUB-header row immediately follows. CBUAE labels this cell as either
+    # "End of Month" (April 2026 onward) or plain "Month" (older vintages).
     group_hdr_idx = None
     for i, row in enumerate(rows[:8]):
         for c in row:
-            if isinstance(c, str) and c.strip().lower() == "end of month":
+            if isinstance(c, str) and c.strip().lower() in ("end of month", "month"):
                 group_hdr_idx = i
                 break
         if group_hdr_idx is not None:
             break
     if group_hdr_idx is None:
-        raise ValueError("Could not locate group-header row (no 'End of Month' label found in first 8 rows).")
+        raise ValueError("Could not locate group-header row (no 'End of Month' or 'Month' label found in first 8 rows).")
     sub_hdr_idx = group_hdr_idx + 1
     group_hdr = rows[group_hdr_idx]
     sub_hdr = rows[sub_hdr_idx] if sub_hdr_idx < len(rows) else ()
@@ -503,8 +650,10 @@ def read_full_history(xlsx_bytes: bytes, iso_dates: bool = True) -> dict[str, di
             continue
         g = group_hdr[i] if i < len(group_hdr) and isinstance(group_hdr[i], str) else None
         s = sub_hdr[i] if i < len(sub_hdr) and isinstance(sub_hdr[i], str) else None
-        # End-of-Month label in group header is the date column anchor; ignore it.
-        if g and _clean(g) and _clean(g).lower() != "end of month":
+        # The date-column anchor in the group header is either "End of Month"
+        # or plain "Month" depending on bulletin vintage; ignore both so they
+        # don't bleed into adjacent column labels.
+        if g and _clean(g) and _clean(g).lower() not in ("end of month", "month"):
             last_group = _clean(g)
         label = f"{last_group} — {_clean(s)}" if s and _clean(s) else last_group
         composite.append(label)
@@ -536,13 +685,8 @@ def read_full_history(xlsx_bytes: bytes, iso_dates: bool = True) -> dict[str, di
 ### End-to-end: latest M1 / M2 / M3 print
 
 ```python
-# Step 1 (agent does this once, via MCP). The format MUST be rawHtml.
-#   firecrawl_scrape_page(
-#       url="https://www.centralbank.ae/en/research-and-statistics/",
-#       formats=["rawHtml"],
-#   )
-# Pass the returned rawHtml to this skill:
-index = parse_bulletin_index(scraped_rawhtml)
+# Step 1: discover current bulletin URLs (one Firecrawl proxy call).
+index = fetch_bulletin_index()
 sb = index["Statistical Bulletin - Banking & Monetary Statistics"][-1]   # most recent
 print(f"Latest bulletin: {sb['month']}")
 
@@ -638,7 +782,14 @@ print(list_sheets(fsi_bytes))
 
 ## Statistical Bulletin sheet directory
 
-Each monthly bulletin XLSX contains 41 sheets. Quick reference:
+**Vintage caveat.** CBUAE renames and reorganises sheets between bulletin
+vintages. The April 2026 bulletin has 41 sheets with the names below; the
+February 2026 vintage had 60 sheets with a different naming scheme (e.g.
+`9 NB Asts` / `11 FB Asts` split where April uses `8 NB & FB Asts`). Always
+call `list_sheets(xlsx_bytes)` first on a freshly downloaded file — that is
+the source of truth, the table below is only the current snapshot.
+
+Each April 2026 bulletin XLSX contains 41 sheets. Quick reference:
 
 | Sheet | What it carries |
 |---|---|
@@ -692,8 +843,8 @@ Compared with Finnhub's UAE macro feed, where CPI is stuck at 2023-12-31 and 8-y
 
 ## Usage rules
 
-- **Two-step discovery + download.** Step 1 is `firecrawl_scrape_page(url=..., formats=["rawHtml"])` on `https://www.centralbank.ae/en/research-and-statistics/` — the `rawHtml` format is mandatory; the default `markdown` format silently drops every XLSX URL on this site. Step 2 passes the returned rawHtml to `parse_bulletin_index`, then calls `download_bulletin` on each URL. Do NOT call urllib directly on the HTML landing page — it returns Cloudflare 403.
-- **Direct urllib on `/media/<hash>/<file>.xlsx` is fine** — no auth, no headers, no Cloudflare on the data files themselves. The skill helpers use only stdlib + openpyxl.
+- **Two-step discovery + download.** Step 1 is `fetch_bulletin_index()` — routes a `rawHtml` scrape through the backend Firecrawl proxy (`PROXY_BASE_URL` / `PROXY_API_KEY`) and parses it. Step 2 calls `download_bulletin` on each XLSX URL. Do NOT call urllib directly on the HTML landing page — it returns Cloudflare 403.
+- **Direct urllib on `/media/<hash>/<file>.xlsx` is fine** — no auth, no headers, no Cloudflare on the data files themselves. The skill helpers use only stdlib + openpyxl + the proxy for the landing page.
 - **All AED values in millions** unless the sheet's `(In Millions of AED)` header says otherwise. Divide by `1000` to get billions for headline reporting (e.g. `M2 ≈ AED 2823B`), and **always quote the as-of month** since CBUAE prints recent months as preliminary (`*` suffix).
 - **Use list_indicators first** when reading from a sheet you have not used before — sheet labels can have minor wording variations across bulletin vintages, and the substring match on `read_series` will pick the first row matching your substring. Confirm the label before quoting a number.
 - **Currency conversion.** USD/AED is pegged at 3.6725 since 1997. Multiply AED values by 0.27225 to get a USD comparison. Quote AED first in any user-facing field; USD is supplementary.

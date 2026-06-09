@@ -235,8 +235,14 @@ def get_brokers_data(gender: str = "", take: int = 50, skip: int = 0,
     rows = (r.get("response") or {}).get("result") or []
     return {"total": rows[0].get("TOTAL") if rows else 0, "rows": rows}
 
-def get_developers(date_from: str = "", date_to: str = "", name: str = "",
-                   take: int = 50, skip: int = 0, sort: str = "NAME_EN_ASC") -> dict:
+def get_developers(date_from: str = "2000-01-01", date_to: str = "2030-12-31",
+                   name: str = "", take: int = 50, skip: int = 0,
+                   sort: str = "NAME_EN_ASC") -> dict:
+    """Registered developers (~140 rows). The DLD developers endpoint requires
+    a non-empty date window — empty `P_FROM_DATE` / `P_TO_DATE` silently return
+    0 rows, and any narrow window (e.g. one month) also returns 0. The defaults
+    here open the gate to cover the full registry; pass `name=` to filter by
+    developer name."""
     body = {
         "P_FROM_DATE": _fmt_date(date_from), "P_TO_DATE": _fmt_date(date_to), "P_NAME": name,
         "P_TAKE": str(take), "P_SKIP": str(skip), "P_SORT": sort,
