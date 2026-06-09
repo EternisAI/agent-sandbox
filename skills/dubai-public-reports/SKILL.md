@@ -240,12 +240,11 @@ def fetch_det_report(url: str, *, format: str = "markdown", wait_ms: int = 4000,
     `wait_ms`: how long Firecrawl waits after page load before serializing. DET charts hydrate
                in 2-3s; default 4000ms gives margin.
 
-    Requires FIRECRAWL_API_KEY. Returns the rendered body as a string.
+    Routed through the backend Firecrawl proxy (`PROXY_BASE_URL` / `PROXY_API_KEY`).
+    Returns the rendered body as a string.
 
     Use this — DO NOT fetch DET URLs with `fetch_report()` or `_fetch_html()`; both return SPA shell."""
-    fc_key = os.environ.get("FIRECRAWL_API_KEY")
-    if not fc_key:
-        raise RuntimeError("FIRECRAWL_API_KEY required to render DET pages (JS-rendered SPA).")
+    proxy_base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/firecrawl-proxy")
     body = {
         "url": url,
         "formats": [format],
@@ -253,9 +252,12 @@ def fetch_det_report(url: str, *, format: str = "markdown", wait_ms: int = 4000,
         "timeout": (timeout_s - 10) * 1000,
     }
     req = urllib.request.Request(
-        "https://api.firecrawl.dev/v1/scrape",
+        proxy_base.rstrip("/") + "/v1/scrape",
         data=json.dumps(body).encode(),
-        headers={"Authorization": f"Bearer {fc_key}", "Content-Type": "application/json"},
+        headers={
+            "Authorization": f"Bearer {os.environ['PROXY_API_KEY']}",
+            "Content-Type": "application/json",
+        },
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=timeout_s) as r:
@@ -326,21 +328,23 @@ def cache_dsc_pdf(original_url: str) -> str:
 
 def discover_dsc_pdfs_via_wayback(landing_page_key: str = "publications_catalog") -> list[str]:
     """Scrape a DSC landing-page snapshot from Wayback and extract PDF URLs.
-    Accepts a key from DSC_LANDING_PAGES or a raw DSC URL. Uses Firecrawl on the
-    Wayback URL since the snapshot pages can be heavy. Requires FIRECRAWL_API_KEY."""
+    Accepts a key from DSC_LANDING_PAGES or a raw DSC URL. Routed through the
+    backend Firecrawl proxy (`PROXY_BASE_URL` / `PROXY_API_KEY`) since the
+    snapshot pages can be heavy and we need JS rendering."""
     import os as _os
-    fc_key = _os.environ.get("FIRECRAWL_API_KEY")
-    if not fc_key:
-        raise RuntimeError("FIRECRAWL_API_KEY required for DSC Wayback landing-page discovery.")
+    proxy_base = _os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/firecrawl-proxy")
     orig = DSC_LANDING_PAGES.get(landing_page_key, landing_page_key)
     wb, ts = _wayback_id(orig)
     if not wb:
         return []
     body = {"url": wb, "formats": ["rawHtml"], "timeout": 110_000}
     req = urllib.request.Request(
-        "https://api.firecrawl.dev/v1/scrape",
+        proxy_base.rstrip("/") + "/v1/scrape",
         data=json.dumps(body).encode(),
-        headers={"Authorization": f"Bearer {fc_key}", "Content-Type": "application/json"},
+        headers={
+            "Authorization": f"Bearer {_os.environ['PROXY_API_KEY']}",
+            "Content-Type": "application/json",
+        },
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=120) as r:
@@ -461,10 +465,10 @@ for source, items in all_reports.items():
   - DSC: **fully geo-blocked outside UAE**. Direct browser-headers fetches return Akamai error pages. We route through Wayback Machine snapshots (`fetch_dsc_pdf_via_wayback`, `cache_dsc_pdf`). Snapshots are typically 2–8 weeks old, but DSC publishes monthly/quarterly anyway so publication lag dominates.
 - **DEWA cadence is biennial, not annual** — Annual Statistics booklets exist for 2019, 2021, 2023. 2025 booklet expected late 2025/early 2026 but not yet at the verified URL pattern. The *real* fresh DEWA data lives in `list_dewa_ir_reports()` — quarterly + annual financials.
 - **DEWA URL year is the publication year**, sometimes shifted by one from the data year. The 2023 booklet may contain 2022 data, etc. Check the cover page / first paragraph of each PDF.
-- **DET tourism reports' content is JS-rendered** — `_fetch_html()` returns only the SPA shell + nav. Use `fetch_det_report(url)` instead, which renders via Firecrawl (`waitFor=4000ms` for Highcharts hydration) and returns the actual visitor numbers / narrative. Requires `FIRECRAWL_API_KEY`.
+- **DET tourism reports' content is JS-rendered** — `_fetch_html()` returns only the SPA shell + nav. Use `fetch_det_report(url)` instead, which renders via the backend Firecrawl proxy (`waitFor=4000ms` for Highcharts hydration) and returns the actual visitor numbers / narrative. Uses `PROXY_BASE_URL` / `PROXY_API_KEY`.
 - **Filename → year extraction is heuristic** — relies on a `20\d{2}` regex match. Some filenames omit the year; consult the cover page for definitive data year.
 - **Caching:** `cache_report()` writes to `/data/dubai-public-reports/` keyed by sanitized filename. PDFs are large (5–10 MB common); be selective about what you cache in a single session.
 - **Rate-limit pacing:** `list_*` helpers include short `time.sleep()` between probes to avoid tripping Akamai rate limits. Don't remove them.
 - **Retry-on-429/5xx** is built into `_open_with_retry`. Doesn't retry 401/403 — those are caller errors (wrong Referer, blocked UA).
-- **DSC URL patterns:** `Report/DSC_SYB_{year}_{section:02d}_{chapter:02d}.pdf` for Statistical Yearbook chapter PDFs (Population, Vital Stats, Education, Health, Labour, Economy, Trade, etc.). `Publication/{title}.pdf` for standalone reports — titles contain spaces, URL-encode them. Use `discover_dsc_pdfs_via_wayback()` for catalogue scraping; that helper requires `FIRECRAWL_API_KEY`. `cache_dsc_pdf()` and `fetch_dsc_pdf_via_wayback()` need only Wayback (no key).
+- **DSC URL patterns:** `Report/DSC_SYB_{year}_{section:02d}_{chapter:02d}.pdf` for Statistical Yearbook chapter PDFs (Population, Vital Stats, Education, Health, Labour, Economy, Trade, etc.). `Publication/{title}.pdf` for standalone reports — titles contain spaces, URL-encode them. Use `discover_dsc_pdfs_via_wayback()` for catalogue scraping; that helper routes through the backend Firecrawl proxy (`PROXY_BASE_URL` / `PROXY_API_KEY`). `cache_dsc_pdf()` and `fetch_dsc_pdf_via_wayback()` need only Wayback (no proxy).
 - **Pair with `plugins/pdf-reader.js`** to actually read PDF content. This skill returns URLs and bytes; PDF-to-text extraction lives in the pdf-reader plugin.

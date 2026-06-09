@@ -1,6 +1,6 @@
 ---
 name: uae-trade
-description: Fetch UAE international trade data. Default backend is FCSC's UAE.Stat SDMX API — monthly through Sept 2025, includes **re-exports by country** (the Dubai re-export economy view), monthly exports/imports by partner, HS section monthly. UN Comtrade is the fallback for HS6 commodity drill-down and multi-country comparison (Comtrade is multilateral; FCSC is UAE-reporter-only). FCSC requires `FIRECRAWL_API_KEY` env var (Cloudflare WAF on the SDMX host). Comtrade is free with no key; richer with optional `COMTRADE_API_KEY`. Pre-scoped to UAE (reporterCode 784 / REF_AREA AE).
+description: Fetch UAE international trade data. Default backend is FCSC's UAE.Stat SDMX API — monthly through Sept 2025, includes **re-exports by country** (the Dubai re-export economy view), monthly exports/imports by partner, HS section monthly. UN Comtrade is the fallback for HS6 commodity drill-down and multi-country comparison (Comtrade is multilateral; FCSC is UAE-reporter-only). Both backends are reached through the backend proxy (`PROXY_BASE_URL` / `PROXY_API_KEY`): FCSC via Firecrawl (Cloudflare WAF on the SDMX host), Comtrade via the keyed proxy with graceful fallback to the unauthenticated public endpoint. Pre-scoped to UAE (reporterCode 784 / REF_AREA AE).
 allowed-tools: Bash(python3 -c *), Bash(python3 - *), Bash(python3 *)
 ---
 
@@ -21,8 +21,8 @@ UAE-scoped trade data from two complementary sources. **FCSC is the default** �
 
 ## Auth model
 
-- **FCSC** — `FIRECRAWL_API_KEY` env var required. The SDMX host (`releaseeuaestat.fcsc.gov.ae`) is Cloudflare-gated; direct urllib gets HTTP 403. Routed through Firecrawl.
-- **Comtrade** — no key required for public-v1 tier. Set `COMTRADE_API_KEY` for human-readable descriptions, reference endpoints, and higher rate limits.
+- **FCSC** — routed through the backend Firecrawl proxy (`PROXY_BASE_URL` / `PROXY_API_KEY`). The SDMX host (`releaseeuaestat.fcsc.gov.ae`) is Cloudflare-gated; direct urllib gets HTTP 403.
+- **Comtrade** — routed through the backend Comtrade proxy (keyed endpoint). Falls back to the unauthenticated public preview endpoint on proxy failure or empty response. No vendor key in the sandbox.
 
 ---
 
@@ -33,27 +33,27 @@ UAE-scoped trade data from two complementary sources. **FCSC is the default** �
 ```python
 import json, os, re, time, urllib.parse, urllib.request, urllib.error
 
-_FIRECRAWL_BASE = "https://api.firecrawl.dev/v1/scrape"
-_UAESTAT_API    = "https://releaseeuaestat.fcsc.gov.ae"  # SDMX REST host (Cloudflare-gated)
+_UAESTAT_API = "https://releaseeuaestat.fcsc.gov.ae"  # SDMX REST host (Cloudflare-gated)
 
-def _fc_key() -> str:
-    k = os.environ.get("FIRECRAWL_API_KEY")
-    if not k:
-        raise RuntimeError("FIRECRAWL_API_KEY env var is required for FCSC. Set it before calling FCSC helpers.")
-    return k
+def _firecrawl_proxy_base() -> str:
+    return os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/firecrawl-proxy")
 
 def _firecrawl_scrape(url: str, *, timeout_s: int = 120, formats: list[str] | None = None) -> str:
-    """Scrape via Firecrawl. Returns raw HTML body (which for SDMX is XML/CSV text).
-    `formats=["rawHtml"]` is the default — preserves SDMX XML / CSV exactly."""
+    """Scrape via the backend Firecrawl proxy. Returns raw HTML body (which for
+    SDMX is XML/CSV text). `formats=["rawHtml"]` is the default — preserves
+    SDMX XML / CSV exactly."""
     body = {
         "url": url,
         "formats": formats or ["rawHtml"],
         "timeout": (timeout_s - 10) * 1000,
     }
     req = urllib.request.Request(
-        _FIRECRAWL_BASE,
+        _firecrawl_proxy_base().rstrip("/") + "/v1/scrape",
         data=json.dumps(body).encode(),
-        headers={"Authorization": f"Bearer {_fc_key()}", "Content-Type": "application/json"},
+        headers={
+            "Authorization": f"Bearer {os.environ['PROXY_API_KEY']}",
+            "Content-Type": "application/json",
+        },
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=timeout_s) as r:
@@ -178,18 +178,15 @@ Use when FCSC's HS section granularity is too coarse, or when you need bilateral
 import json, os, time, urllib.parse, urllib.request, urllib.error
 
 REPORTER_UAE = 784  # United Arab Emirates ISO M49
-_KEY = os.environ.get("COMTRADE_API_KEY")
-_BASE_KEYED  = "https://comtradeapi.un.org/data/v1/get"
-_BASE_PUBLIC = "https://comtradeapi.un.org/public/v1/preview"
+_PUBLIC_BASE = "https://comtradeapi.un.org/public/v1/preview"  # unauthenticated fallback
+_UA = "Mozilla/5.0 (compatible; AxionAgent/1.0)"
 
-def _comtrade_get(path_after_get: str, params: dict, *, max_retries: int = 4, base_delay: float = 1.0) -> dict:
-    """HTTP GET with retry on 429 (rate limit), 5xx, and timeouts. Public-v1 is ~1 call/sec —
-    429 responses include a Retry-After header which we honour. Keyed tier is ~5/sec."""
-    base = _BASE_KEYED if _KEY else _BASE_PUBLIC
-    url = f"{base}/{path_after_get}?{urllib.parse.urlencode(params)}"
-    headers = {"User-Agent": "Mozilla/5.0 (compatible; AxionAgent/1.0)"}
-    if _KEY:
-        headers["Ocp-Apim-Subscription-Key"] = _KEY
+def _comtrade_proxy_base() -> str:
+    """Backend-keyed Comtrade endpoint. The proxy injects Ocp-Apim-Subscription-Key
+    server-side; the sandbox never sees the vendor key."""
+    return os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/comtrade-proxy")
+
+def _do_get(url: str, headers: dict, *, max_retries: int = 4, base_delay: float = 1.0) -> dict:
     last_err = None
     for attempt in range(max_retries + 1):
         try:
@@ -214,6 +211,31 @@ def _comtrade_get(path_after_get: str, params: dict, *, max_retries: int = 4, ba
                 time.sleep(base_delay * (2 ** attempt)); continue
             raise
     raise last_err
+
+def _comtrade_get(path_after_get: str, params: dict, *, max_retries: int = 4, base_delay: float = 1.0) -> dict:
+    """GET via the keyed backend proxy (preferred — ~5/sec, includes descriptions).
+    Falls back to the public unauthenticated endpoint on proxy failure or empty
+    response (public tier is ~1/sec, honours Retry-After on 429).
+
+    The keyed tier is always given `includeDesc=true` for human-readable labels;
+    public-tier responses have null descriptions."""
+    qs_keyed = urllib.parse.urlencode({**params, "includeDesc": "true"})
+    keyed_url = f"{_comtrade_proxy_base().rstrip('/')}/data/v1/get/{path_after_get}?{qs_keyed}"
+    keyed_headers = {
+        "Authorization": f"Bearer {os.environ['PROXY_API_KEY']}",
+        "User-Agent": _UA,
+    }
+    try:
+        resp = _do_get(keyed_url, keyed_headers, max_retries=max_retries, base_delay=base_delay)
+        if resp.get("data"):
+            return resp
+        # Keyed call succeeded but returned no rows — fall through to public.
+    except Exception:
+        pass
+
+    qs_public = urllib.parse.urlencode(params)
+    public_url = f"{_PUBLIC_BASE}/{path_after_get}?{qs_public}"
+    return _do_get(public_url, {"User-Agent": _UA}, max_retries=max_retries, base_delay=base_delay)
 ```
 
 ### Comtrade tools
@@ -227,8 +249,6 @@ def get_uae_trade_comtrade(year: int, flow: str = "X", partner: int = 0, hs_code
         "reporterCode": REPORTER_UAE, "period": year,
         "partnerCode": partner, "flowCode": flow, "cmdCode": hs_code,
     }
-    if _KEY:
-        params["includeDesc"] = "true"
     return _comtrade_get("C/A/HS", params).get("data", []) or []
 
 def top_partners_comtrade(year: int, flow: str = "X", top: int = 10) -> list[dict]:
@@ -237,8 +257,6 @@ def top_partners_comtrade(year: int, flow: str = "X", top: int = 10) -> list[dic
         "reporterCode": REPORTER_UAE, "period": year,
         "flowCode": flow, "cmdCode": "TOTAL",
     }
-    if _KEY:
-        params["includeDesc"] = "true"
     data = _comtrade_get("C/A/HS", params).get("data", []) or []
     rows = [r for r in data if (r.get("partnerCode") or 0) > 0]
     rows.sort(key=lambda r: r.get("primaryValue") or 0, reverse=True)
@@ -250,8 +268,6 @@ def top_commodities_comtrade(year: int, flow: str = "X", top: int = 10) -> list[
         "reporterCode": REPORTER_UAE, "period": year,
         "partnerCode": 0, "flowCode": flow,
     }
-    if _KEY:
-        params["includeDesc"] = "true"
     data = _comtrade_get("C/A/HS", params).get("data", []) or []
     rows = [r for r in data if r.get("cmdCode") not in (None, "TOTAL", "")]
     rows.sort(key=lambda r: r.get("primaryValue") or 0, reverse=True)
@@ -389,7 +405,7 @@ for y in sorted(exp.keys()):
 ## Notes
 
 ### FCSC
-- **`FIRECRAWL_API_KEY` required** — SDMX host is Cloudflare-WAF-gated; direct urllib returns 403. Helpers raise a clear error if missing.
+- **Routed through the backend Firecrawl proxy** — SDMX host is Cloudflare-WAF-gated; direct urllib returns 403. Helpers read `PROXY_BASE_URL` / `PROXY_API_KEY`; the Firecrawl vendor key lives only on the backend.
 - **Period syntax (SDMX):** annual `YYYY` (e.g. `"2024"`); monthly `YYYY-MM` (e.g. `"2025-09"`); quarterly `YYYY-Q{1-4}`. `startPeriod`/`endPeriod` work for all.
 - **Re-export endpoint is heavy** — `DF_TRADE_REXP_COUNTRY_MTH` full history is ~7MB CSV. Always pass `start_period` / `end_period` to scope.
 - **CSV columns vary by dataflow** — always inspect `csv.DictReader` field names from a small sample first, then write column-specific extraction. Common keys: `TIME_PERIOD`, `OBS_VALUE`, `REF_AREA`, `Counterpart area`, `MEASURE`, `UNIT_MEASURE`.
@@ -397,7 +413,7 @@ for y in sorted(exp.keys()):
 - **Firecrawl is rate-limited** — serialize requests; insert `time.sleep(1)` between probes if iterating.
 
 ### Comtrade
-- **`COMTRADE_API_KEY` env var** — optional. When present, requests use the keyed endpoint and pass `includeDesc=true` for human-readable labels.
+- **Backend-keyed proxy with public fallback** — `_comtrade_get` hits the keyed proxy first (always passes `includeDesc=true` for human-readable labels), then falls back to the unauthenticated public preview endpoint on proxy failure or empty response. No vendor key in the sandbox.
 - **UAE reports annually only** — `freqCode=A`. Monthly queries return empty for any UAE period (verified 2026-06-09 against the data-availability endpoint). Use FCSC for monthly.
 - **Data lag** — most recent year typically available is *current year − 2*. UAE 2024 and 2025 data is not yet ingested by UN. Use FCSC for current-year data.
 - **HS classification:** `cmdCode=TOTAL` for all goods, HS2 (`"27"`), HS4 (`"2709"`), or HS6 (`"270900"`).

@@ -12,109 +12,39 @@ The UN FAO's flagship dataset. Free, comprehensive, 77 data domains. Uses JWT au
 
 ## Sandbox environment
 
-- **Python 3.12** stdlib only (urllib, json, base64, time)
-- **Env vars required** in `agent-sandbox/.env`:
-  - `FAOSTAT_USERNAME` — your developer portal username
-  - `FAOSTAT_PASSWORD` — your developer portal password
-- **Token cache** at `/data/faostat-token.json` (per-thread persistent)
+- **Python 3.12** stdlib only (urllib, json)
+- **Auth via backend FAOSTAT proxy** — the sandbox only reads `PROXY_BASE_URL` / `PROXY_API_KEY`; the backend owns FAO credentials and token lifecycle. No `FAOSTAT_USERNAME` / `FAOSTAT_PASSWORD` in the sandbox.
 - **No installs needed**
 
-## Auth flow (transparent to caller)
+## Auth (entirely backend-managed)
 
-The skill handles all token lifecycle automatically:
-1. First call → POST username+password to FAO login → returns AccessToken (60 min) + RefreshToken (~30 days)
-2. Subsequent calls within 60 min → reuse cached AccessToken
-3. After 60 min → use RefreshToken via Cognito → fresh AccessToken (no password)
-4. After ~30 days → full re-login via env-var credentials
-
-You never refresh anything by hand. Set env vars once.
-
-```python
-import os, json, time, base64, urllib.request, urllib.parse
-from pathlib import Path
-
-TOKEN_FILE = Path("/data/faostat-token.json")
-LOGIN_URL = "https://faostatservices.fao.org/api/v1/auth/login"
-COGNITO_URL = "https://cognito-idp.eu-west-1.amazonaws.com/"
-COGNITO_CLIENT_ID = "2csltsigao85ivhp6ojp1aic7o"
-API_BASE = "https://faostatservices.fao.org/api/v1/en"
-
-def _decode_exp(jwt: str) -> int:
-    payload_b64 = jwt.split(".")[1]
-    payload_b64 += "=" * ((4 - len(payload_b64) % 4) % 4)
-    return json.loads(base64.b64decode(payload_b64))["exp"]
-
-UA = "Mozilla/5.0 (compatible; AxionAgent/1.0)"
-
-def _login() -> dict:
-    user = os.environ["FAOSTAT_USERNAME"]
-    pw = os.environ["FAOSTAT_PASSWORD"]
-    body = urllib.parse.urlencode({"username": user, "password": pw}).encode()
-    req = urllib.request.Request(LOGIN_URL, data=body, method="POST",
-        headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=15) as r:
-        return json.loads(r.read().decode())["AuthenticationResult"]
-
-def _refresh(refresh_token: str) -> dict:
-    body = json.dumps({
-        "AuthFlow": "REFRESH_TOKEN_AUTH",
-        "ClientId": COGNITO_CLIENT_ID,
-        "AuthParameters": {"REFRESH_TOKEN": refresh_token},
-    }).encode()
-    req = urllib.request.Request(COGNITO_URL, data=body, method="POST", headers={
-        "Content-Type": "application/x-amz-json-1.1",
-        "X-Amz-Target": "AWSCognitoIdentityProviderService.InitiateAuth",
-        "User-Agent": UA,
-    })
-    with urllib.request.urlopen(req, timeout=15) as r:
-        return json.loads(r.read().decode())["AuthenticationResult"]
-
-def get_access_token() -> str:
-    """Returns a valid access token. Refreshes or re-logs in as needed."""
-    now = int(time.time())
-    state = {}
-    if TOKEN_FILE.exists():
-        try:
-            state = json.loads(TOKEN_FILE.read_text())
-        except Exception:
-            state = {}
-    # 1. Cached access token still valid? (5-min skew buffer)
-    if state.get("access_token") and state.get("access_exp", 0) > now + 300:
-        return state["access_token"]
-    # 2. Refresh token still valid?
-    if state.get("refresh_token") and state.get("refresh_exp", 0) > now + 300:
-        try:
-            ar = _refresh(state["refresh_token"])
-            state["access_token"] = ar["AccessToken"]
-            state["access_exp"] = _decode_exp(ar["AccessToken"])
-            TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
-            TOKEN_FILE.write_text(json.dumps(state))
-            return state["access_token"]
-        except Exception:
-            pass  # fall through to full login
-    # 3. Full login
-    ar = _login()
-    state = {
-        "access_token": ar["AccessToken"],
-        "access_exp": _decode_exp(ar["AccessToken"]),
-        "refresh_token": ar["RefreshToken"],
-        "refresh_exp": now + 30 * 86400,  # Cognito default 30-day refresh window
-    }
-    TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
-    TOKEN_FILE.write_text(json.dumps(state))
-    return state["access_token"]
-```
+The backend Faostat proxy logs in once with the configured developer-portal credentials, caches the AccessToken + RefreshToken process-locally, and refreshes via Cognito before forwarding each request. The skill is unauthenticated against FAO directly — it only carries the per-thread `PROXY_API_KEY` JWT.
 
 ## Generic request helper
 
 ```python
+import os, json, urllib.request, urllib.parse
+
+UA = "Mozilla/5.0 (compatible; AxionAgent/1.0)"
+
+def _api_base() -> str:
+    # The proxy strips /api/faostat-proxy and prepends /api/v1; we append /en
+    # here so callers can write language-agnostic endpoint paths like
+    # "groupsanddomains" — final URL becomes /api/v1/en/<path>.
+    return os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/faostat-proxy").rstrip("/") + "/en"
+
 def faostat_get(path: str, params: dict = None) -> dict:
-    """GET an authenticated endpoint, returns parsed JSON."""
-    token = get_access_token()
+    """GET a FAOSTAT endpoint via the backend proxy. Returns parsed JSON.
+
+    `path` is the endpoint after the language code, e.g. "groupsanddomains" or
+    "data/CP". The proxy injects the FAO bearer token server-side."""
     params = params or {}
     qs = urllib.parse.urlencode(params)
-    url = f"{API_BASE}/{path.lstrip('/')}" + (f"?{qs}" if qs else "")
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "User-Agent": UA})
+    url = f"{_api_base()}/{path.lstrip('/')}" + (f"?{qs}" if qs else "")
+    req = urllib.request.Request(url, headers={
+        "Authorization": f"Bearer {os.environ['PROXY_API_KEY']}",
+        "User-Agent": UA,
+    })
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.loads(r.read().decode())
 ```
@@ -339,7 +269,7 @@ def global_total_production(item_code: str, year_start: int = 2018, year_end: in
    - QCL: `5510` = Production, `5312` = Area harvested, `5412` = Yield
    - TM: `5610` = Import Quantity, `5622` = Import Value, `5910` = Export Quantity
    - PP: `5532` = Producer Price (USD/tonne)
-8. **Token cache at `/data/faostat-token.json`** — per-thread persistent. Each new thread cold-starts (~200ms login).
+8. **Auth lives on the backend** — the proxy logs into `faostatservices.fao.org`, caches the AccessToken process-locally, and refreshes via Cognito. The sandbox carries only the per-thread `PROXY_API_KEY` JWT; FAO credentials never reach it.
 9. **Use the new portal** — `faostatservices.fao.org`. The legacy `fenixservices.fao.org` is dead (Cloudflare 521).
 10. **No bulk via API.** For full dataset dumps: `https://bulks-faostat.fao.org/production/{DATASET}_E_All_Data_(Normalized).zip` (no auth).
 
@@ -360,16 +290,3 @@ top5 = sorted(by_partner.items(), key=lambda x: -x[1])[:5]
 print(f"UAE wheat imports 2022, top 5 partners: {top5}")
 ```
 
-## Token cache inspection (debug only)
-
-```python
-import json
-from pathlib import Path
-state = json.loads(Path("/data/faostat-token.json").read_text())
-print({
-    "access_token_chars": len(state.get("access_token","")),
-    "access_expires_in_min": (state["access_exp"] - int(time.time())) // 60,
-    "refresh_token_chars": len(state.get("refresh_token","")),
-    "refresh_expires_in_days": (state["refresh_exp"] - int(time.time())) // 86400,
-})
-```

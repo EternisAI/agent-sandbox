@@ -1,6 +1,6 @@
 ---
 name: uae-macro
-description: Fetch UAE macroeconomic data — CPI, GDP, population, unemployment, trade balance, fiscal indicators. Default backend is FCSC's UAE.Stat SDMX API for fresh series (monthly CPI through Dec 2025, quarterly GDP, PPI, sector GDP, govt revenues/expenditures). World Bank Indicators API is the fallback for long historical series (1960+) and indicators FCSC doesn't carry. IMF DataMapper provides forecasts through 2031. FCSC requires `FIRECRAWL_API_KEY` (Cloudflare WAF). World Bank + IMF are unauthenticated.
+description: Fetch UAE macroeconomic data — CPI, GDP, population, unemployment, trade balance, fiscal indicators. Default backend is FCSC's UAE.Stat SDMX API for fresh series (monthly CPI through Dec 2025, quarterly GDP, PPI, sector GDP, govt revenues/expenditures). World Bank Indicators API is the fallback for long historical series (1960+) and indicators FCSC doesn't carry. IMF DataMapper provides forecasts through 2031. FCSC is reached through the backend Firecrawl proxy (Cloudflare WAF on the SDMX host); World Bank + IMF are unauthenticated.
 allowed-tools: Bash(python3 -c *), Bash(python3 - *), Bash(python3 *)
 ---
 
@@ -24,7 +24,7 @@ Three complementary public sources for UAE country-level macro data, with **FCSC
 
 ## Auth model
 
-- **FCSC** — `FIRECRAWL_API_KEY` env var required. SDMX host (`releaseeuaestat.fcsc.gov.ae`) is Cloudflare-gated; direct urllib gets HTTP 403.
+- **FCSC** — routed through the backend Firecrawl proxy (`PROXY_BASE_URL` / `PROXY_API_KEY`). The SDMX host (`releaseeuaestat.fcsc.gov.ae`) is Cloudflare-gated; direct urllib gets HTTP 403. No vendor key in the sandbox.
 - **World Bank** — no key, no auth. ISO `ARE`.
 - **IMF DataMapper** — no key, no auth. ISO `ARE`.
 
@@ -37,27 +37,27 @@ Three complementary public sources for UAE country-level macro data, with **FCSC
 ```python
 import json, os, re, time, urllib.parse, urllib.request, urllib.error
 
-_FIRECRAWL_BASE = "https://api.firecrawl.dev/v1/scrape"
-_UAESTAT_API    = "https://releaseeuaestat.fcsc.gov.ae"  # SDMX REST host (Cloudflare-gated)
+_UAESTAT_API = "https://releaseeuaestat.fcsc.gov.ae"  # SDMX REST host (Cloudflare-gated)
 
-def _fc_key() -> str:
-    k = os.environ.get("FIRECRAWL_API_KEY")
-    if not k:
-        raise RuntimeError("FIRECRAWL_API_KEY env var is required for FCSC. Set it before calling FCSC helpers.")
-    return k
+def _firecrawl_proxy_base() -> str:
+    return os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/firecrawl-proxy")
 
 def _firecrawl_scrape(url: str, *, timeout_s: int = 120, formats: list[str] | None = None) -> str:
-    """Scrape via Firecrawl. Returns raw HTML body (which for SDMX is XML/CSV text).
-    `formats=["rawHtml"]` is the default — preserves SDMX XML / CSV exactly."""
+    """Scrape via the backend Firecrawl proxy. Returns raw HTML body (which for
+    SDMX is XML/CSV text). `formats=["rawHtml"]` is the default — preserves
+    SDMX XML / CSV exactly."""
     body = {
         "url": url,
         "formats": formats or ["rawHtml"],
         "timeout": (timeout_s - 10) * 1000,
     }
     req = urllib.request.Request(
-        _FIRECRAWL_BASE,
+        _firecrawl_proxy_base().rstrip("/") + "/v1/scrape",
         data=json.dumps(body).encode(),
-        headers={"Authorization": f"Bearer {_fc_key()}", "Content-Type": "application/json"},
+        headers={
+            "Authorization": f"Bearer {os.environ['PROXY_API_KEY']}",
+            "Content-Type": "application/json",
+        },
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=timeout_s) as r:
@@ -348,7 +348,7 @@ for h in hits:
 ## Notes
 
 ### FCSC
-- **`FIRECRAWL_API_KEY` required.** Helpers raise clearly if missing.
+- **Routed through the backend Firecrawl proxy** — helpers read `PROXY_BASE_URL` / `PROXY_API_KEY`; the vendor key lives only on the backend.
 - **Period syntax:** annual `YYYY`, monthly `YYYY-MM`, quarterly `YYYY-Q{1-4}`.
 - **Quarterly CPI `DF_CPI_Q` returns empty** — use `DF_CPI` (monthly) and aggregate, or `DF_CPI_ANN`.
 - **Quarterly GDP version pin:** `DF_QGDP_CUR` requires `version="1.8.0"` — pinned in `MACRO_DATAFLOWS`. Front-end URLs may show higher numbers; the structure registry has the authoritative version.
