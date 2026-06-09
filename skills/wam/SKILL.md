@@ -1,6 +1,6 @@
 ---
 name: wam
-description: Search and discover articles from WAM (Emirates News Agency, wam.ae) — the official UAE federal news wire. Surfaces (1) Cabinet decisions, federal decrees, emiri decrees, ministerial actions, ruler's-office directives — every legally-binding UAE government instrument; (2) **CBUAE monetary policy** — every Central Bank base-rate decision (maintain / raise / cut) and policy announcement (GDP projections, regulatory launches) is published as a dated WAM wire article; (3) UAE / regional news the global wires miss. Use when the agent needs primary-source government evidence for the Authoritative-disclosure override rule, or for UAE-specific news. Returns article URLs + titles + dates; agents pass URLs to `firecrawl_scrape_page` for body extraction.
+description: Search and discover articles from WAM (Emirates News Agency, wam.ae) — the official UAE federal news wire. Surfaces (1) Cabinet decisions, federal decrees, emiri decrees, ministerial actions, ruler's-office directives — every legally-binding UAE government instrument; (2) **CBUAE monetary policy** — every Central Bank base-rate decision (maintain / raise / cut) and policy announcement (GDP projections, regulatory launches) is published as a dated WAM wire article; (3) UAE / regional news the global wires miss. Use when the agent needs primary-source government evidence for the Authoritative-disclosure override rule, or for UAE-specific news. Returns article URLs + titles + dates; call `fetch_article_body(url)` to read full rendered bodies (routed through the backend Firecrawl proxy — wam.ae article pages are SPA-rendered, plain urllib returns only the shell).
 allowed-tools: Bash(python3 -c *), Bash(python3 - *), Bash(python3 *)
 ---
 
@@ -14,7 +14,7 @@ WAM is the official news wire of the United Arab Emirates and the canonical reco
 
 The wire publishes ~50–70 articles per day across 19 languages, with a public archive going back to January 2016.
 
-This skill exposes **discovery** — searching and listing articles by date, title, and category — through WAM's public sitemap feeds. It does **not** fetch article bodies. To read an article, pass the returned URL to the existing `firecrawl_scrape_page` MCP tool (already in your agent toolkit). The skill stays focused on cheap, fast, structured discovery; body extraction is composed at the agent level.
+This skill exposes **discovery** — searching and listing articles by date, title, and category — through WAM's public sitemap feeds (direct urllib, no auth). For full article bodies, use `fetch_article_body(url)`, which routes through the backend Firecrawl proxy (`PROXY_BASE_URL` / `PROXY_API_KEY`) — direct urllib on `/en/article/<slug>` returns only the SPA shell.
 
 ## When to pick this skill
 
@@ -37,13 +37,16 @@ for any of:
 For non-UAE topics, US-listed names, or commodity/equity price data, stay on
 the existing tools (`exa_search`, `search_news`, Finnhub, Massive).
 
-## No authentication required
+## Authentication
 
-WAM sitemaps are fully public. Direct HTTP from the sandbox — no proxy, no API key, no auth headers.
+- **Sitemap discovery** (every `search_*` / `list_*` method): no auth. WAM sitemaps are public; direct urllib from the sandbox.
+- **Article body fetch** (`fetch_article_body`): routed through the backend Firecrawl proxy (`PROXY_BASE_URL` / `PROXY_API_KEY` from the sandbox env). No vendor key in the sandbox.
 
 ## Helper
 
 ```python
+import json
+import os
 import urllib.request
 import xml.etree.ElementTree as ET
 import re
@@ -61,6 +64,48 @@ def _fetch(url: str) -> bytes:
     req = urllib.request.Request(url, headers={"User-Agent": UA})
     with urllib.request.urlopen(req, timeout=30) as resp:
         return resp.read()
+
+
+def _firecrawl_proxy_base() -> str:
+    return os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/firecrawl-proxy")
+
+
+def _firecrawl_scrape(url: str, *, timeout_s: int = 90,
+                      formats: list[str] | None = None,
+                      only_main_content: bool = True,
+                      wait_ms: int | None = None) -> str:
+    """Scrape via the backend Firecrawl proxy. Returns the rendered body as a
+    string (markdown by default). Used by fetch_article_body() — WAM article
+    pages are SPA-rendered behind a cookie consent banner.
+
+    `wait_ms` adds a Firecrawl `waitFor` after page load before serialization.
+    WAM hydrates client-side; without a wait, Firecrawl returns either the SPA
+    shell (`formats=["rawHtml"]`) or fails with SCRAPE_ALL_ENGINES_FAILED
+    (`formats=["markdown"]`). fetch_article_body defaults to wait_ms=5000."""
+    body: dict = {
+        "url": url,
+        "formats": formats or ["markdown"],
+        "onlyMainContent": only_main_content,
+        "timeout": (timeout_s - 10) * 1000,
+    }
+    if wait_ms:
+        body["waitFor"] = wait_ms
+    req = urllib.request.Request(
+        _firecrawl_proxy_base().rstrip("/") + "/v1/scrape",
+        data=json.dumps(body).encode(),
+        headers={
+            "Authorization": f"Bearer {os.environ['PROXY_API_KEY']}",
+            "Content-Type": "application/json",
+            "User-Agent": UA,
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout_s) as r:
+        resp = json.loads(r.read().decode())
+    if not resp.get("success"):
+        raise RuntimeError(f"Firecrawl failed for {url}: {resp.get('error','no error msg')[:200]}")
+    data = resp.get("data") or {}
+    return data.get("markdown") or data.get("rawHtml") or ""
 ```
 
 ## Supported methods
@@ -73,6 +118,7 @@ def _fetch(url: str) -> bytes:
 | `search_cabinet_decisions` | UAE government actions: Cabinet, decrees, laws, ministerial, ruler's office | same as `search_news` |
 | **`search_cbuae_policy`** | **CBUAE monetary policy: base-rate decisions, GDP projections, regulatory announcements** | **same as `search_news`** |
 | `list_categories` | List the WAM category taxonomy (from menu sitemap) | 1 fetch (~5KB) |
+| `fetch_article_body` | Render the body of one article URL through the backend Firecrawl proxy | 1 Firecrawl scrape |
 
 ## Method signatures
 
@@ -111,6 +157,19 @@ def search_cbuae_policy(
 
 def list_categories(language: str = "en") -> list[str]:
     """Returns the WAM category slugs (business, markets, real-estate, oil-and-energy, ai, emirates-news, ...)."""
+
+def fetch_article_body(url: str, *, only_main_content: bool = True,
+                       wait_ms: int = 5000, timeout_s: int = 90) -> str:
+    """Render the body of a single WAM article URL through the backend Firecrawl
+    proxy. Returns the rendered markdown (`onlyMainContent=True` strips nav,
+    header, footer, and the cookie banner). Use this AFTER any discovery method
+    has surfaced a URL — direct urllib on `/en/article/<slug>` returns only the
+    SPA shell, not the body.
+
+    `wait_ms` (default 5000) is the Firecrawl `waitFor` delay between page load
+    and serialization. WAM hydrates client-side; without this wait Firecrawl
+    either returns the SPA shell or fails with SCRAPE_ALL_ENGINES_FAILED.
+    Lower it only if you have measured 5s as too generous on a specific URL."""
 ```
 
 ## Return shape
@@ -139,7 +198,13 @@ def list_recent_news(language: str = "en", query: str | None = None, limit: int 
     out = []
     for u in root.findall("sm:url", NS):
         title_el = u.find("news:news/news:title", NS) or u.find("image:image/image:title", NS)
-        title = title_el.text if title_el is not None else ""
+        title = (title_el.text or "").strip() if title_el is not None else ""
+        # Some sitemap entries ship without news:title AND image:title — skip
+        # them. Otherwise they leak into results as empty-title rows and any
+        # downstream regex/predicate either misclassifies them or excludes them
+        # noisily.
+        if not title:
+            continue
         if pattern and not pattern.search(title):
             continue
         date_el = u.find("news:news/news:publication_date", NS)
@@ -331,6 +396,13 @@ def list_categories(language: str = "en"):
         if m:
             cats.append(m.group(1))
     return sorted(set(cats))
+
+
+def fetch_article_body(url: str, *, only_main_content: bool = True,
+                       wait_ms: int = 5000, timeout_s: int = 90) -> str:
+    return _firecrawl_scrape(url, formats=["markdown"],
+                             only_main_content=only_main_content,
+                             wait_ms=wait_ms, timeout_s=timeout_s)
 ```
 
 ## Examples
@@ -402,7 +474,7 @@ that an agent answering UAE macro / banking questions needs:
 
 **Implication for the agent:** for most UAE central-bank questions the title
 text alone carries the load-bearing datum (rate, growth %, sector aggregate
-in AED billion). Body extraction via `firecrawl_scrape_page` is only needed
+in AED billion). Body extraction via `fetch_article_body(url)` is only needed
 when the agent wants the full vote language, the regulatory statement text,
 or detailed methodology — not for the headline number, which is in the
 title.
@@ -441,22 +513,18 @@ for h in hits:
 
 ### Read the body of a Cabinet decision
 
-The skill returns URLs only. Body extraction goes through the existing
-`firecrawl_scrape_page` MCP tool the agent already has access to. Pattern:
+Discovery (`search_*` / `list_*`) returns URLs only. Body extraction is
+`fetch_article_body(url)`, which routes through the backend Firecrawl proxy
+to handle cookie consent + SPA hydration that direct urllib cannot satisfy.
 
 ```python
-# Step 1 (this skill): discovery — get the URL and title
+# Step 1: discovery — get the URL and title
 hits = search_cabinet_decisions(date_after="2026-05-01", date_before="2026-05-31")
 cabinet_ai = next((h for h in hits if "Agentic AI" in h["title"]), None)
 
-# Step 2 (agent does this separately via MCP, NOT in Python):
-# firecrawl_scrape_page(url=cabinet_ai["url"])
-# Returns the rendered article body. Pass that text into the synthesis.
-
-# Why split: Firecrawl handles cookie consent + SPA hydration that this skill's
-# urllib path cannot. The skill keeps discovery cheap; the MCP tool handles
-# the expensive body fetch only on the articles the agent actually needs.
-print(f"Body URL to scrape: {cabinet_ai['url']}")
+# Step 2: render the body (one Firecrawl proxy call). Returns markdown.
+body = fetch_article_body(cabinet_ai["url"])
+print(body[:500])
 ```
 
 ### List available categories
@@ -477,10 +545,10 @@ print(list_categories(language="en"))
 
 ## Usage rules
 
-- **No auth.** Do not add `Authorization` or `X-API-Key` headers — WAM sitemaps are public.
+- **No auth on sitemaps.** Discovery methods (`list_recent_news`, `search_*`, `list_categories`) fetch public sitemaps with direct urllib — do not add `Authorization` or `X-API-Key` headers.
 - **Always pass a date window** to `search_news` / `search_cabinet_decisions`. Walking many months unfiltered will pull megabytes for no reason. For "recent" use `list_recent_news` (one fetch, last ~48 hours).
-- **Title filtering is regex, case-insensitive.** Combine alternatives with `|`. The skill does not have full-text body search — only title. If the agent needs to search inside article text, it must scrape candidate articles via `firecrawl_scrape_page` and grep locally.
-- **Always feed the URL through `firecrawl_scrape_page` for body extraction.** Direct urllib fetch of `/en/article/<slug>` returns only the SPA shell; the body is JS-rendered behind a cookie consent banner. Do not waste tokens trying to parse the SPA HTML.
+- **Title filtering is regex, case-insensitive.** Combine alternatives with `|`. The skill does not have full-text body search — only title. If the agent needs to search inside article text, call `fetch_article_body(url)` on the candidates and grep locally.
+- **Always use `fetch_article_body(url)` for body extraction.** Direct urllib fetch of `/en/article/<slug>` returns only the SPA shell; the body is JS-rendered behind a cookie consent banner. `fetch_article_body` routes the URL through the backend Firecrawl proxy (no vendor key in the sandbox; requires `PROXY_BASE_URL` + `PROXY_API_KEY` env vars, which are always present in agent sessions).
 - **Cite the WAM URL inline as `[N](url)`.** WAM is a primary government wire (Tier-1 source per the coordinator's "Authoritative-disclosure override" rule), so cabinet-decision and federal-decree articles can anchor load-bearing claims directly — no need to cross-verify with secondary press for the existence of the act.
 - **Quote the timestamp.** WAM publish times are precise to the second with timezone (e.g. `2026-06-09T15:32:40+04:00`). Always include the date in the synthesis next to any claim sourced here; the override rule depends on the disclosure bracketing the resolution window.
 - **Rate limits.** None observed against the sitemap endpoints. The polite default is one request per second; if you are walking 6+ months in one call, add `time.sleep(0.5)` between fetches.

@@ -11,7 +11,7 @@ DFSA is the financial-services regulator for the DIFC free zone. It licenses ban
 ## When to pick this skill
 
 - **DIFC competitive-positioning questions** — when the agent needs to count licensed firms by category, track licence-grant velocity, or compare DIFC's regulatory perimeter against ADGM or other free zones.
-- **DFSA enforcement risk** — when a question touches a named firm or executive and the agent needs to check whether DFSA has issued a decision notice, settlement, enforceable undertaking, or fine against them. The skill returns the actual S3-hosted PDF URL so the agent can read the redacted decision notice through `firecrawl_scrape_page` or stream-extract the body.
+- **DFSA enforcement risk** — when a question touches a named firm or executive and the agent needs to check whether DFSA has issued a decision notice, settlement, enforceable undertaking, or fine against them. The skill returns the actual S3-hosted PDF URL so the agent can `download_pdf(url)` and stream-extract the body.
 - **DFSA rulebook and regulatory change** — when the agent needs to track DFSA consultation papers, notices on amendments to legislation, or new rule modules. The sitemap and `/news/` URL slugs surface these alongside enforcement.
 - **DIFC entity background** — when the agent is doing diligence on a DIFC-domiciled name and wants to scan the full news + alerts record across the DFSA's six-year publication archive.
 
@@ -28,14 +28,19 @@ Same two-tier pattern as the cbuae skill:
 
 | Surface | Direct urllib | Notes |
 |---|---|---|
-| `www.dfsa.ae/sitemap.xml` and any HTML page | ❌ Cloudflare-gated (HTTP 403) | Must go through `firecrawl_scrape_page` |
+| `www.dfsa.ae/sitemap.xml` and any HTML page | ❌ Cloudflare-gated (HTTP 403) | Routed through the backend Firecrawl proxy (`PROXY_BASE_URL` / `PROXY_API_KEY`). No vendor key in the sandbox. |
 | `365343652932-web-server-storage.s3.eu-west-2.amazonaws.com/files/<path>/<name>.pdf` (enforcement decision notices) | ✅ Public (HTTP 200) | Direct urllib download, no auth |
 
-**Critical Firecrawl format note.** When calling `firecrawl_scrape_page` on the DFSA sitemap or any HTML page that you intend to parse for URLs, pass `formats: ["rawHtml"]`. The default `markdown` strips link targets the same way it does on CBUAE. For article *bodies* (an individual news URL whose text you want to read), `formats: ["markdown"]` with `onlyMainContent: true` is fine.
+**Format selection.** The skill's helpers pick the right format per surface:
+- `fetch_sitemap()` and `fetch_enforcement_landing()` use `rawHtml` — the `markdown` serializer drops link targets on this site.
+- `fetch_article_body(url)` uses `markdown` with `onlyMainContent=True` — best for LLM ingestion of news bodies.
+- `fetch_register(name)` uses `markdown` with a `waitFor` for SPA hydration of the XHR-loaded register tables.
 
 ## Helper
 
 ```python
+import json
+import os
 import urllib.request
 import io
 import re
@@ -68,29 +73,78 @@ def _parse_lastmod(s: str) -> date | None:
             return datetime.strptime(s[:10], "%Y-%m-%d").date()
         except Exception:
             return None
+
+
+def _firecrawl_proxy_base() -> str:
+    return os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/firecrawl-proxy")
+
+
+def _firecrawl_scrape(url: str, *, timeout_s: int = 120,
+                      formats: list[str] | None = None,
+                      only_main_content: bool | None = None,
+                      wait_ms: int | None = None) -> str:
+    """Scrape via the backend Firecrawl proxy. Returns the body as a string
+    (rawHtml or markdown, depending on `formats`). All DFSA HTML surfaces are
+    Cloudflare-gated; direct urllib returns 403."""
+    body: dict = {
+        "url": url,
+        "formats": formats or ["rawHtml"],
+        "timeout": (timeout_s - 10) * 1000,
+    }
+    if only_main_content is not None:
+        body["onlyMainContent"] = only_main_content
+    if wait_ms:
+        body["waitFor"] = wait_ms
+    req = urllib.request.Request(
+        _firecrawl_proxy_base().rstrip("/") + "/v1/scrape",
+        data=json.dumps(body).encode(),
+        headers={
+            "Authorization": f"Bearer {os.environ['PROXY_API_KEY']}",
+            "Content-Type": "application/json",
+            "User-Agent": UA,
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout_s) as r:
+        resp = json.loads(r.read().decode())
+    if not resp.get("success"):
+        raise RuntimeError(f"Firecrawl failed for {url}: {resp.get('error','no error msg')[:200]}")
+    data = resp.get("data") or {}
+    return data.get("rawHtml") or data.get("markdown") or ""
 ```
 
 ## Supported methods
 
 | Method | Purpose | Cost |
 | --- | --- | --- |
-| `parse_sitemap` | Extract all 3,389 DFSA URL entries with lastmod from Firecrawl-scraped sitemap | 0 (in-memory) |
+| `fetch_sitemap` | One-call discovery: scrape `sitemap.xml` via the backend Firecrawl proxy and parse to a list of `{url, lastmod, lang}` | 1 Firecrawl scrape |
+| `parse_sitemap` | Pure parser — pass rawHtml of `sitemap.xml`; same return shape. Use only when you have cached rawHtml | 0 (in-memory) |
 | `search_dfsa_news` | Filter sitemap entries to `/news/<slug>` URLs matching query/date window | 0 (in-memory) |
 | `search_enforcement_actions` | Convenience filter for enforcement-related news (fines, decisions, settlements) | 0 (in-memory) |
 | `search_regulatory_notices` | Convenience filter for legislation amendments, consultation papers, rule changes | 0 (in-memory) |
-| `extract_enforcement_pdfs` | Parse the `/what-we-do/enforcement/regulatory-actions` rawHtml for S3 PDF URLs | 0 (in-memory) |
+| `fetch_enforcement_landing` | One-call: scrape the enforcement landing page and return the list of S3 PDF URLs | 1 Firecrawl scrape |
+| `extract_enforcement_pdfs` | Pure parser variant of the above, on rawHtml you already have | 0 (in-memory) |
+| `fetch_article_body` | Render a single news/article URL through the proxy (`markdown`, main-content-only) | 1 Firecrawl scrape |
+| `fetch_register` | Render a public-register page through the proxy with a `waitFor` for the XHR-loaded firm tables | 1 Firecrawl scrape |
 | `download_pdf` | Direct fetch of an S3-hosted decision notice PDF | 1 HTTP request |
-| `register_urls` | Return the 7 known public-register URLs (firms, individuals, funds) for the agent to crawl with Firecrawl actions | 0 (in-memory constant) |
+| `register_urls` | Return the 7 known public-register URLs (firms, individuals, funds) | 0 (in-memory constant) |
 
 ## Method signatures
 
 ```python
-def parse_sitemap(rawhtml: str) -> list[dict]:
-    """Pass the rawHtml returned by firecrawl_scrape_page on
-    https://www.dfsa.ae/sitemap.xml. Returns a list of:
+def fetch_sitemap() -> list[dict]:
+    """One-call discovery: scrape https://www.dfsa.ae/sitemap.xml through the
+    backend Firecrawl proxy and parse into a list of:
         {"url": str, "lastmod": "YYYY-MM-DD", "lang": "en"|"ar"}
     Sorted by lastmod descending (newest first). 3,389 entries as of 2026-06.
-    """
+    Call this ONCE per session, then run as many `search_*` calls as needed
+    against the returned list."""
+
+def parse_sitemap(rawhtml: str) -> list[dict]:
+    """Pure parser — pass rawHtml of https://www.dfsa.ae/sitemap.xml. Same
+    return shape as fetch_sitemap(). Most callers should use fetch_sitemap()
+    instead — this is only useful when you have rawHtml cached from a prior
+    call."""
 
 def search_dfsa_news(sitemap: list[dict], query: str | None = None,
                       date_after: str | None = None,
@@ -120,24 +174,43 @@ def search_regulatory_notices(sitemap: list[dict],
     """Notices on legislation amendments, consultation paper releases,
     rulebook module updates, and other regulatory change announcements."""
 
+def fetch_enforcement_landing() -> list[dict]:
+    """One-call: scrape https://www.dfsa.ae/what-we-do/enforcement/regulatory-actions
+    through the backend Firecrawl proxy and extract every S3-hosted
+    decision-notice PDF link. Returns the same shape as extract_enforcement_pdfs()."""
+
 def extract_enforcement_pdfs(rawhtml: str) -> list[dict]:
-    """Pass the rawHtml of
-    https://www.dfsa.ae/what-we-do/enforcement/regulatory-actions
-    Returns a list of {"url": "...pdf", "filename": "<name>.pdf"} for every
-    S3-hosted decision-notice PDF linked on the page. The DFSA enforcement
-    page surfaces the ~20 most recent decision notices this way."""
+    """Pure parser — pass rawHtml of the enforcement landing page. Returns
+    a list of {"url": "...pdf", "filename": "<name>.pdf"} for every S3-hosted
+    decision-notice PDF linked on the page. The DFSA enforcement page surfaces
+    the ~20 most recent decision notices this way. Most callers should use
+    fetch_enforcement_landing() instead."""
+
+def fetch_article_body(url: str, *, only_main_content: bool = True,
+                       timeout_s: int = 90) -> str:
+    """Render a single DFSA news/article page through the backend Firecrawl
+    proxy. Returns markdown (main-content-only by default). Use after
+    search_dfsa_news() / search_enforcement_actions() has surfaced a URL."""
+
+def fetch_register(register_name: str, *, wait_ms: int = 5000,
+                   timeout_s: int = 120) -> str:
+    """Render a DFSA public-register page through the proxy with a `waitFor`
+    long enough for the XHR-loaded firm/individual/fund tables to hydrate.
+    `register_name` is a key from register_urls() (e.g. "firms",
+    "individuals"). Returns markdown. Firecrawl bills per scrape with waitFor —
+    use sparingly. Prefer search_dfsa_news() for recent licence events."""
 
 def download_pdf(url: str) -> bytes:
     """Direct fetch of an S3-hosted decision notice PDF. Returns raw bytes;
-    pass through pdftotext (in-sandbox) or feed the URL to
-    firecrawl_scrape_page for a markdown rendering."""
+    pass through pdftotext (in-sandbox) or feed the URL to fetch_article_body
+    if you want Firecrawl's markdown rendering instead."""
 
 def register_urls() -> dict[str, str]:
     """Return the 7 known DFSA public-register URLs. The register itself is
-    SPA-rendered (XHR-loaded after page mount), so direct Firecrawl on these
-    URLs returns navigation only. To actually fetch the register data, call
-    firecrawl_scrape_page with `actions=[{"type":"wait","milliseconds":5000}]`
-    or fall back to enumerating recent licence grants via search_dfsa_news()."""
+    SPA-rendered (XHR-loaded after page mount), so a plain Firecrawl scrape on
+    these URLs returns navigation only. Use fetch_register(name) which adds
+    the waitFor, or fall back to enumerating recent licence grants via
+    search_dfsa_news()."""
 ```
 
 ## Return shape
@@ -171,12 +244,52 @@ def register_urls() -> dict[str, str]:
 ## Implementation
 
 ```python
+import json
+import os
 import urllib.request
 import io
 import re
 from datetime import datetime, date
 
 UA = "Mozilla/5.0 (compatible; AxionAgent/1.0)"
+
+_SITEMAP_URL = "https://www.dfsa.ae/sitemap.xml"
+_ENFORCEMENT_LANDING = "https://www.dfsa.ae/what-we-do/enforcement/regulatory-actions"
+
+
+def _firecrawl_proxy_base() -> str:
+    return os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/firecrawl-proxy")
+
+
+def _firecrawl_scrape(url: str, *, timeout_s: int = 120,
+                      formats: list[str] | None = None,
+                      only_main_content: bool | None = None,
+                      wait_ms: int | None = None) -> str:
+    body: dict = {
+        "url": url,
+        "formats": formats or ["rawHtml"],
+        "timeout": (timeout_s - 10) * 1000,
+    }
+    if only_main_content is not None:
+        body["onlyMainContent"] = only_main_content
+    if wait_ms:
+        body["waitFor"] = wait_ms
+    req = urllib.request.Request(
+        _firecrawl_proxy_base().rstrip("/") + "/v1/scrape",
+        data=json.dumps(body).encode(),
+        headers={
+            "Authorization": f"Bearer {os.environ['PROXY_API_KEY']}",
+            "Content-Type": "application/json",
+            "User-Agent": UA,
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout_s) as r:
+        resp = json.loads(r.read().decode())
+    if not resp.get("success"):
+        raise RuntimeError(f"Firecrawl failed for {url}: {resp.get('error','no error msg')[:200]}")
+    data = resp.get("data") or {}
+    return data.get("rawHtml") or data.get("markdown") or ""
 
 
 def _fetch_bytes(url: str) -> bytes:
@@ -220,6 +333,10 @@ def parse_sitemap(rawhtml: str) -> list[dict]:
     # Sort newest first
     out.sort(key=lambda e: e["lastmod"] or "", reverse=True)
     return out
+
+
+def fetch_sitemap() -> list[dict]:
+    return parse_sitemap(_firecrawl_scrape(_SITEMAP_URL, formats=["rawHtml"]))
 
 
 def _filter(sitemap: list[dict], *,
@@ -313,6 +430,29 @@ def extract_enforcement_pdfs(rawhtml: str) -> list[dict]:
     return out
 
 
+def fetch_enforcement_landing() -> list[dict]:
+    return extract_enforcement_pdfs(
+        _firecrawl_scrape(_ENFORCEMENT_LANDING, formats=["rawHtml"])
+    )
+
+
+def fetch_article_body(url: str, *, only_main_content: bool = True,
+                       timeout_s: int = 90) -> str:
+    return _firecrawl_scrape(url, formats=["markdown"],
+                             only_main_content=only_main_content,
+                             timeout_s=timeout_s)
+
+
+def fetch_register(register_name: str, *, wait_ms: int = 5000,
+                   timeout_s: int = 120) -> str:
+    urls = register_urls()
+    if register_name not in urls:
+        raise KeyError(f"Unknown register '{register_name}'. Known: {list(urls)}")
+    return _firecrawl_scrape(urls[register_name], formats=["markdown"],
+                             only_main_content=True, wait_ms=wait_ms,
+                             timeout_s=timeout_s)
+
+
 def download_pdf(url: str) -> bytes:
     return _fetch_bytes(url)
 
@@ -332,10 +472,8 @@ def register_urls() -> dict[str, str]:
 ### Discovery — load the sitemap once
 
 ```python
-# Step 1 (agent, via MCP):
-#   firecrawl_scrape_page(url="https://www.dfsa.ae/sitemap.xml",
-#                          formats=["rawHtml"])
-sitemap = parse_sitemap(scraped_rawhtml)
+# One Firecrawl-proxy call, parsed in place.
+sitemap = fetch_sitemap()
 print(f"Loaded {len(sitemap)} sitemap entries, newest = {sitemap[0]['lastmod']}")
 # → Loaded 3389 sitemap entries, newest = 2026-06-03
 ```
@@ -364,17 +502,15 @@ for h in hits:
     print(f"  {h['lastmod']}  {h['url']}")
 
 # For the body of any hit:
-#   firecrawl_scrape_page(url=h["url"], formats=["markdown"], onlyMainContent=True)
+#   body = fetch_article_body(h["url"])
 ```
 
 ### Read a decision-notice PDF directly
 
 ```python
-# Step 1: get the current set of S3 PDFs from the enforcement landing page.
-# Agent calls firecrawl_scrape_page(
-#     url="https://www.dfsa.ae/what-we-do/enforcement/regulatory-actions",
-#     formats=["rawHtml"])
-pdfs = extract_enforcement_pdfs(landing_rawhtml)
+# Step 1: one Firecrawl-proxy call to the enforcement landing page;
+# returns the current ~20 S3 PDF URLs already parsed.
+pdfs = fetch_enforcement_landing()
 print(f"Found {len(pdfs)} decision-notice PDFs on the landing page")
 for p in pdfs[:5]:
     print(f"  {p['filename']}")
@@ -391,8 +527,6 @@ with open("/tmp/notice.pdf", "wb") as f:
     f.write(pdf_bytes)
 # Then in the same agent turn:
 #   subprocess.run(["pdftotext", "-layout", "/tmp/notice.pdf", "-"], ...)
-# Or pass the URL to firecrawl_scrape_page with formats=["markdown"] to get
-# a rendered version that Firecrawl handles for you.
 ```
 
 ### Regulatory notices — track rulebook changes
@@ -410,20 +544,16 @@ for n in notices[:15]:
 ### Public register — known SPA limitation
 
 ```python
-# The DFSA public register is XHR-loaded after page mount.
-# A plain firecrawl_scrape_page(url, formats=["rawHtml"]) on these URLs
-# returns the navigation shell only — no firm rows. To actually fetch the
-# register, the agent has two paths:
+# The DFSA public register is XHR-loaded after page mount. A plain Firecrawl
+# scrape returns the navigation shell only — no firm rows. Two options:
 #
-#   (a) Use Firecrawl actions to wait for the XHR to complete:
-#       firecrawl_scrape_page(
-#           url="https://www.dfsa.ae/public-register/firms",
-#           formats=["markdown"],
-#           actions=[{"type":"wait", "milliseconds": 5000}])
-#       (Firecrawl billing per action — heavier than a plain scrape.)
+#   (a) fetch_register(name) — calls the proxy with `waitFor=5000` so the XHR
+#       has time to populate. Firecrawl bills more for waitFor than a plain
+#       scrape, so use sparingly.
+#         body = fetch_register("firms")        # markdown, ~5s wait
 #
-#   (b) Enumerate recent licence grants by sitemap walk — DFSA publishes
-#       a /news/ article for material licence events (new firm authorisation,
+#   (b) Enumerate recent licence grants by sitemap walk — DFSA publishes a
+#       /news/ article for material licence events (new firm authorisation,
 #       licence variation, withdrawal). search_dfsa_news with a regex like
 #       r"authorisation|licen[cs]e-grant|firm-X" surfaces these.
 #
@@ -445,8 +575,8 @@ print(urls["firms"])
 
 ## Usage rules
 
-- **Single-fetch sitemap, then in-memory filter.** Call `firecrawl_scrape_page(url="https://www.dfsa.ae/sitemap.xml", formats=["rawHtml"])` ONCE per agent session, parse with `parse_sitemap`, then run as many `search_*` calls as needed against the parsed list. Re-fetching the sitemap on every search wastes Firecrawl quota.
-- **`rawHtml` for sitemap + landing pages, `markdown` for article bodies.** The `markdown` format strips link `href` targets that you need for downstream discovery; the `rawHtml` format includes them. For reading a single article's body (no further URL extraction), `markdown` with `onlyMainContent=true` is fine.
+- **Single-fetch sitemap, then in-memory filter.** Call `fetch_sitemap()` ONCE per agent session, then run as many `search_*` calls as needed against the returned list. Re-fetching the sitemap on every search wastes Firecrawl proxy quota.
+- **Format selection is handled by the skill.** `fetch_sitemap` / `fetch_enforcement_landing` use `rawHtml` (so `<a href>` targets survive); `fetch_article_body` / `fetch_register` use `markdown` with `onlyMainContent=true` (best for LLM ingestion). You should not need to override these.
 - **S3 PDF downloads bypass Cloudflare** — use `download_pdf(url)` directly with stdlib urllib. No auth, no headers needed.
 - **Sitemap lastmod IS the article date.** DFSA's sitemap lastmod tracks the article publish/update time precisely (timezone-aware, second precision). Date-filtering by lastmod works without scraping individual articles.
 - **DIFC-scope only.** Do NOT report DFSA enforcement against a firm as evidence of UAE-wide regulatory action — it is specifically about DIFC-licensed activity. A firm fined by DFSA may operate unaffected outside DIFC (in mainland UAE, ADGM, or elsewhere).

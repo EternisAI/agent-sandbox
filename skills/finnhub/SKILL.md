@@ -43,14 +43,14 @@ To discover tickers on an exchange, call `client.stock_symbols(exchange="DB")` (
 Empirically confirmed against the current proxy contract (tested 2026-06-09 across DEWA.DB, EMAAR.DB, EMIRATESNBD.DB, DU.DB, SALIK.DB, TALABAT.DB, PARKIN.DB, EMPOWER.DB, FAB.AD, 2222.SR):
 
 - ✅ `company_basic_financials` — full metric set, currency in AED/SAR. Use for market cap, P/E, ROE, 52W returns.
-- ✅ `company_eps_estimates`, `company_revenue_estimates` — forward consensus with analyst count.
 - ✅ `recommendation_trends` — aggregate buy/hold/sell history, often 15-22 analysts on the largest Dubai names.
-- ✅ `earnings_calendar` (pass the GCC ticker as `symbol`) — quarterly EPS/revenue estimates with `epsActual`/`revenueActual` after report.
+- ✅ `earnings_calendar` (pass the GCC ticker as `symbol`, `international=True`) — past quarters with `epsActual`/`revenueActual` plus **the next upcoming print's `epsEstimate` / `revenueEstimate`**. This is the only path to any forward EPS/revenue estimate for GCC names at the current tier (single-quarter only — `company_eps_estimates` / `company_revenue_estimates` for a multi-quarter strip are blocked).
 - ✅ Quarterly earnings history (via the same calendar call, looking at past quarters with `epsActual` populated).
 
 ### What is blocked or empty for GCC tickers
 
 - ❌ `price_target`, `upgrade_downgrade` — return `{"error":"You don't have access to this resource."}` for GCC tickers. Skip them on Dubai questions.
+- ❌ `company_eps_estimates`, `company_revenue_estimates` — return the same 403 access error for GCC tickers across both `freq="quarterly"` and `freq="annual"` (verified 2026-06-09 against DEWA.DB and EMAAR.DB). Partial replacement: `earnings_calendar(symbol=..., international=True, _from=<today>, to=<+1y>)` surfaces the **next** quarter's `epsEstimate` / `revenueEstimate` (single row, single quarter ahead) — not the multi-quarter forward strip the blocked endpoints would have returned. If the question requires a full forward strip, declare it unavailable rather than substituting the next-print number.
 - ❌ `stock_social_sentiment` — same access error. The sentiment agent's regional press search (Al Arabiya, The National, MEED, WAM via `exa_search`) is the right channel for GCC discourse, not this endpoint.
 - ❌ Live prices, historical OHLCV candles, dividend history — not exposed in this skill at all; for those, fall back on Massive (which lacks GCC coverage anyway) or the `dfm-adx` build-out planned in `plans/potential-data-dubai.md`.
 - ⚠️ `stock_insider_sentiment` (MSPR), `stock_uspto_patent`, `stock_visa_application`, `stock_lobbying`, `stock_usa_spending` — **US-only by data scope**. Calling them with GCC tickers returns an empty `data: []`, not an error. Do not infer absence of activity from absence of data — these endpoints simply do not cover GCC.
@@ -458,7 +458,7 @@ print(f"ROE (TTM): {m.get('roeTTM'):.2f}%")
 
 ### Dubai listed company — fundamentals + consensus + earnings history
 
-Works the same way as a US name, but the ticker carries the exchange suffix and values come back in AED. The example below covers a Dubai-strategy lookup that an Axion agent would do when the question touches a DFM-listed name (DEWA, Emaar, Salik, Empower, Talabat, Parkin, Emirates NBD, du). Do NOT call `price_target`, `upgrade_downgrade`, or `stock_social_sentiment` for these tickers — they return an access error.
+Works the same way as a US name, but the ticker carries the exchange suffix and values come back in AED. The example below covers a Dubai-strategy lookup that an Axion agent would do when the question touches a DFM-listed name (DEWA, Emaar, Salik, Empower, Talabat, Parkin, Emirates NBD, du). Do NOT call `price_target`, `upgrade_downgrade`, `stock_social_sentiment`, `company_eps_estimates`, or `company_revenue_estimates` for these tickers — they return an access error at the current proxy tier. Use `earnings_calendar` with a forward date window to get the **next quarter's** `epsEstimate` / `revenueEstimate` — only one quarter ahead, not the multi-quarter strip the blocked endpoints would have returned.
 
 ```python
 import os
@@ -480,33 +480,29 @@ print(f"{symbol} market cap: AED {mcap_aed_b:.1f}B  P/E: {m.get('peNormalizedAnn
 print(f"  52W return: {m.get('52WeekPriceReturnDaily'):.1f}%   ROE TTM: {m.get('roeTTM')}")
 print(f"  13W return: {m.get('13WeekPriceReturnDaily'):.1f}%   26W: {m.get('26WeekPriceReturnDaily'):.1f}%")
 
-# 2. Forward consensus.
-eps = client.company_eps_estimates(symbol, freq="quarterly")
-for e in eps.get("data", [])[:4]:
-    print(f"  Q{e['quarter']} {e['year']}: EPS avg={e['epsAvg']:.3f} AED (analysts={e['numberAnalysts']})")
-
-rev = client.company_revenue_estimates(symbol, freq="quarterly")
-for r in rev.get("data", [])[:4]:
-    avg_b = r["revenueAvg"] / 1e9
-    print(f"  Q{r['quarter']} {r['year']}: Rev avg=AED {avg_b:.2f}B (analysts={r['numberAnalysts']})")
-
-# 3. Analyst consensus history (works for GCC; price_target / upgrade_downgrade do NOT).
+# 2. Analyst consensus history (works for GCC; price_target / upgrade_downgrade do NOT).
 recs = client.recommendation_trends(symbol)
 if recs:
     r = recs[0]
     print(f"  {r['period']} consensus: strongBuy={r['strongBuy']} buy={r['buy']} hold={r['hold']} sell={r['sell']} strongSell={r['strongSell']}")
 
-# 4. Quarterly earnings history with surprise — fetched via earnings_calendar over the past year.
-today = str(date.today())
-year_ago = str(date.today().replace(year=date.today().year - 1))
-ec = client.earnings_calendar(_from=year_ago, to=today, symbol=symbol, international=True)
+# 3. Earnings history + next-quarter forward estimate, both via earnings_calendar.
+#    For GCC tickers this is the only working path — company_eps_estimates and
+#    company_revenue_estimates 403. Use a window that spans BOTH past and
+#    forward, otherwise the forward row won't surface.
+from datetime import timedelta
+year_ago = (date.today() - timedelta(days=365)).isoformat()
+plus_year = (date.today() + timedelta(days=365)).isoformat()
+ec = client.earnings_calendar(_from=year_ago, to=plus_year, symbol=symbol, international=True)
 for q in ec.get("earningsCalendar", []):
     actual = q.get("epsActual")
-    if actual is None:
-        continue
-    est = q.get("epsEstimate") or 0
-    surprise = ((actual - est) / est * 100) if est else 0
-    print(f"  {q['date']} Q{q['quarter']} {q['year']}: EPS actual={actual} est={est} surprise={surprise:+.1f}%")
+    if actual is not None:
+        est = q.get("epsEstimate") or 0
+        surprise = ((actual - est) / est * 100) if est else 0
+        print(f"  past: {q['date']} Q{q['quarter']} {q['year']}: EPS actual={actual} est={est} surprise={surprise:+.1f}%")
+    elif q.get("epsEstimate") is not None:
+        rev_b = (q.get("revenueEstimate") or 0) / 1e9
+        print(f"  fwd:  {q['date']} Q{q['quarter']} {q['year']}: EPS est={q['epsEstimate']} AED, Rev est=AED {rev_b:.2f}B (next print only)")
 ```
 
 Notes specific to this call shape on GCC tickers:
@@ -574,4 +570,4 @@ for d in spend.get("data", [])[:5]:
 - `earnings_calendar` with `symbol=""` returns all tickers (1500+) — always pass a specific `symbol` unless you need the full market calendar.
 - `stock_uspto_patent` hard cap is 250 records/call — use ≤3 month windows for large-cap tech companies and check `len(data) == 250` to detect truncation.
 - `price_target` and `recommendation_trends` return sell-side consensus that herds toward price and adds noise. Only call them when the task explicitly asks for analyst coverage or price targets. Use `upgrade_downgrade` for individual rating actions — those are useful as event-driven sentiment signals.
-- **GCC ticker rules:** for tickers ending `.DB`, `.AD`, `.SR`, `.QA`, `.BH`, or `.KW`, **do NOT call `price_target`, `upgrade_downgrade`, or `stock_social_sentiment`** — they return access errors at the current tier. Do not retry; treat them as unavailable for these tickers and proceed without that signal. `stock_insider_sentiment`, `stock_uspto_patent`, `stock_visa_application`, `stock_lobbying`, and `stock_usa_spending` return empty data for GCC tickers because the underlying datasets are US-only — do NOT report this as "no insider activity" or "no lobbying", report it as "data not available for this jurisdiction." All other endpoints (`company_basic_financials`, `company_eps_estimates`, `company_revenue_estimates`, `recommendation_trends`, `earnings_calendar`, `ipo_calendar`) work normally — read the `currency` field and quote values in the native currency before any USD conversion.
+- **GCC ticker rules:** for tickers ending `.DB`, `.AD`, `.SR`, `.QA`, `.BH`, or `.KW`, **do NOT call `price_target`, `upgrade_downgrade`, `stock_social_sentiment`, `company_eps_estimates`, or `company_revenue_estimates`** — all five return access errors at the current proxy tier. Do not retry; treat them as unavailable for these tickers and proceed without that signal. For the **next-print** forward EPS/revenue estimate on GCC names, use `earnings_calendar(symbol=..., international=True, _from=<past>, to=<future>)` — single quarter only, not a multi-quarter strip; if the question requires a multi-quarter forward consensus, declare it unavailable rather than substituting. `stock_insider_sentiment`, `stock_uspto_patent`, `stock_visa_application`, `stock_lobbying`, and `stock_usa_spending` return empty data for GCC tickers because the underlying datasets are US-only — do NOT report this as "no insider activity" or "no lobbying", report it as "data not available for this jurisdiction." The other endpoints (`company_basic_financials`, `recommendation_trends`, `earnings_calendar`, `ipo_calendar`) work normally — read the `currency` field and quote values in the native currency before any USD conversion.
