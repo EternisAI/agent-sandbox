@@ -36,6 +36,8 @@ CBUAE publishes monthly XLSX bulletins covering UAE monetary aggregates, the cen
 
 **Implication:** the agent uses the existing `firecrawl_scrape_page` MCP tool ONCE per session to get current bulletin URLs, then this skill's Python helpers download and parse the XLSX files directly.
 
+**Critical Firecrawl format note.** When calling `firecrawl_scrape_page` on the CBUAE landing page, you MUST pass `formats: ["rawHtml"]`. The default `markdown` format strips the `<a href="...">` tags entirely on this site — Firecrawl returns dataset names as headings but with no XLSX URLs, because the file links are rendered through JavaScript filters that the markdown serializer drops. Verified live: `markdown` returns 0 XLSX URLs, `rawHtml` returns all 9. Pass `rawHtml` to the parser below.
+
 ## Helper
 
 ```python
@@ -46,14 +48,96 @@ import re
 
 UA = "Mozilla/5.0 (compatible; AxionAgent/1.0)"
 
+# Months → MM mapping shared across all date-normalization functions.
+_MONTH_MAP = {
+    "jan": "01", "feb": "02", "mar": "03", "apr": "04", "may": "05", "jun": "06",
+    "jul": "07", "aug": "08", "sep": "09", "oct": "10", "nov": "11", "dec": "12",
+    "january": "01", "february": "02", "march": "03", "april": "04",
+    "june": "06", "july": "07", "august": "08", "september": "09",
+    "october": "10", "november": "11", "december": "12",
+}
+
+
 def _fetch_bytes(url: str) -> bytes:
     """Download an XLSX (or PDF) file directly. Works for /media/<hash>/<file>.xlsx URLs."""
     req = urllib.request.Request(url, headers={"User-Agent": UA})
     with urllib.request.urlopen(req, timeout=60) as resp:
         return resp.read()
 
+
 def _open_xlsx(data: bytes) -> openpyxl.Workbook:
     return openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=True)
+
+
+def _clean(s: str) -> str:
+    """Strip outer whitespace and collapse embedded newlines/tabs in label strings.
+    CBUAE bulletins sometimes carry labels like 'UAE Fund Transfer System (FTS) \\nInter-bank Payments'
+    or sheet names like '1-Sel Ind ' with a trailing space. Without this, exact-match
+    lookups KeyError and waste an agent turn."""
+    if not isinstance(s, str):
+        return s
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _normalize_date(label: str) -> str:
+    """Normalize a CBUAE date label to ISO-ish form.
+
+      'Jan 19'      → '2019-01'      (Banking Operations short form)
+      'Feb-19'      → '2019-02'      (Banking Operations short form)
+      'Apr 2025'    → '2025-04'      (Statistical Bulletin standard form)
+      'Apr 2026 *'  → '2026-04'      (preliminary marker stripped)
+      'Q1 2026'     → '2026-Q1'      (Core FSI quarterly form)
+      'Mar-26'      → '2026-03'      (some sheets)
+
+    Unknown formats are returned unchanged so the caller can still see the original."""
+    if not isinstance(label, str):
+        return label
+    s = label.strip().rstrip(" *")
+
+    # Quarterly: 'Q1 2026' or 'Q1-2026' → '2026-Q1'
+    qm = re.match(r"^Q(\d)[\s-](\d{2,4})$", s, re.I)
+    if qm:
+        y = qm.group(2)
+        if len(y) == 2:
+            y = "20" + y
+        return f"{y}-Q{qm.group(1)}"
+
+    # Monthly: 'Apr 2025', 'Apr-25', 'Jan 19', 'April 2025'
+    mm = re.match(r"^([A-Za-z]+)[\s-](\d{2,4})$", s)
+    if mm:
+        mon, y = mm.group(1).lower(), mm.group(2)
+        if mon in _MONTH_MAP:
+            if len(y) == 2:
+                y = "20" + y
+            return f"{y}-{_MONTH_MAP[mon]}"
+    return s
+
+
+def _resolve_sheet(wb, name: str) -> str:
+    """Return the actual sheet name for a user-supplied lookup string. Tries:
+      1. exact match
+      2. exact match after whitespace cleanup
+      3. case-insensitive prefix match
+      4. case-insensitive substring match
+
+    Raises KeyError with the closest candidates if nothing matches."""
+    if name in wb.sheetnames:
+        return name
+    cleaned = _clean(name)
+    for sn in wb.sheetnames:
+        if _clean(sn) == cleaned:
+            return sn
+    lo = cleaned.lower()
+    for sn in wb.sheetnames:
+        if _clean(sn).lower().startswith(lo):
+            return sn
+    for sn in wb.sheetnames:
+        if lo in _clean(sn).lower():
+            return sn
+    raise KeyError(
+        f"Sheet '{name}' not found. Candidates: " +
+        ", ".join(f"'{sn.strip()}'" for sn in wb.sheetnames[:8])
+    )
 ```
 
 ## Supported methods
@@ -98,7 +182,7 @@ def read_series(xlsx_bytes: bytes, sheet_name: str, indicator: str) -> dict[str,
     Raises KeyError if the indicator is not found on the sheet (suggesting
     you call list_indicators first)."""
 
-def read_full_history(xlsx_bytes: bytes) -> dict[str, dict[str, float]]:
+def read_full_history(xlsx_bytes: bytes, iso_dates: bool = True) -> dict[str, dict[str, float]]:
     """Wide-format reader for the Banking Operations Statistics XLSX, which is
     a single sheet with End-of-Month rows × ~12 columns of cash-operations
     metrics (Coins/Notes/Total deposits, withdrawals, cheques, FTS). Returns
@@ -255,11 +339,14 @@ def list_indicators(xlsx_bytes: bytes, sheet_name: str,
     """Walk the candidate label columns (B, C, A by default) and return every
     non-empty label string. The bulletin format is inconsistent: some sheets
     put indicator labels in column B, others use B for section headers and
-    put the indicators in column C. Scanning both columns is safer than
-    guessing per-sheet.
+    put the indicators in column C. Scanning all three columns is safer
+    than guessing per-sheet.
 
-    The returned list deduplicates while preserving first-seen order."""
+    Labels are returned with embedded newlines collapsed and trailing
+    whitespace stripped. The returned list deduplicates while preserving
+    first-seen order."""
     wb = _open_xlsx(xlsx_bytes)
+    sheet_name = _resolve_sheet(wb, sheet_name)
     ws = wb[sheet_name]
     out, seen = [], set()
     for row in ws.iter_rows(min_row=1, values_only=True):
@@ -267,7 +354,7 @@ def list_indicators(xlsx_bytes: bytes, sheet_name: str,
             if c - 1 < len(row):
                 v = row[c - 1]
                 if isinstance(v, str):
-                    s = v.strip()
+                    s = _clean(v)
                     if s and not s.startswith("(") and s not in seen:
                         seen.add(s)
                         out.append(s)
@@ -276,18 +363,25 @@ def list_indicators(xlsx_bytes: bytes, sheet_name: str,
 
 def read_series(xlsx_bytes: bytes, sheet_name: str, indicator: str,
                 label_cols: tuple = _LABEL_COLS,
-                header_row: int | None = None) -> dict[str, float]:
+                header_row: int | None = None,
+                iso_dates: bool = True) -> dict[str, float]:
     """Find the row whose label (in any of the candidate label columns) matches
-    `indicator` (substring, case-insensitive) and return {english_date_label:
-    value}. The English date headers live in row 6 of standard bulletin sheets;
-    the Arabic headers in row 5. We auto-detect by scanning rows 4-8 for the
-    row whose cells most look like English month tokens.
+    `indicator` (substring, case-insensitive) and return `{date_label: value}`.
+
+    Date labels are normalized to ISO form by default: 'Apr 2026 *' → '2026-04',
+    'Q1 2026' → '2026-Q1'. Pass `iso_dates=False` to keep the original
+    bulletin labels verbatim (e.g. 'Apr 2026 *').
+
+    The English date headers live in row 6 of standard bulletin sheets; the
+    Arabic headers in row 5. We auto-detect by scanning rows 4-8 for the row
+    whose cells most look like English month tokens.
 
     If multiple rows match the substring, the first one wins — use a longer
     or more specific substring to disambiguate (e.g. 'Money Supply M2' rather
     than 'M2', or 'Conventional Banks Total Assets' rather than 'Total
     Assets' on a sheet that has multiple bank-type subsections)."""
     wb = _open_xlsx(xlsx_bytes)
+    sheet_name = _resolve_sheet(wb, sheet_name)
     ws = wb[sheet_name]
     rows = list(ws.iter_rows(values_only=True))
 
@@ -304,7 +398,7 @@ def read_series(xlsx_bytes: bytes, sheet_name: str, indicator: str,
         for c in label_cols:
             if c - 1 < len(row):
                 v = row[c - 1]
-                if isinstance(v, str) and pattern.search(v):
+                if isinstance(v, str) and pattern.search(_clean(v)):
                     indicator_row_idx = i
                     break
         if indicator_row_idx is not None:
@@ -319,14 +413,14 @@ def read_series(xlsx_bytes: bytes, sheet_name: str, indicator: str,
     for j, header in enumerate(headers):
         if not isinstance(header, str):
             continue
-        h = header.strip()
-        if not re.match(r"^(?:Q\d|\w{3,9})\s*\d{2,4}", h):
+        h = _clean(header)
+        if not re.match(r"^(?:Q\d|\w{3,9})[\s-]?\d{2,4}", h):
             continue
         val = data_row[j] if j < len(data_row) else None
         if val is None:
             continue
-        clean = h.rstrip(" *")
-        out[clean] = float(val) if isinstance(val, (int, float)) else val
+        key = _normalize_date(h) if iso_dates else h.rstrip(" *")
+        out[key] = float(val) if isinstance(val, (int, float)) else val
     return out
 
 
@@ -351,7 +445,7 @@ _MONTH_LABEL_RE = re.compile(
 )
 
 
-def read_full_history(xlsx_bytes: bytes) -> dict[str, dict[str, float]]:
+def read_full_history(xlsx_bytes: bytes, iso_dates: bool = True) -> dict[str, dict[str, float]]:
     """For the Banking Operations Statistics XLSX (single sheet, rows = months,
     columns = metric categories). Returns {column_label: {month_label: value}}.
 
@@ -410,9 +504,9 @@ def read_full_history(xlsx_bytes: bytes) -> dict[str, dict[str, float]]:
         g = group_hdr[i] if i < len(group_hdr) and isinstance(group_hdr[i], str) else None
         s = sub_hdr[i] if i < len(sub_hdr) and isinstance(sub_hdr[i], str) else None
         # End-of-Month label in group header is the date column anchor; ignore it.
-        if g and g.strip() and g.strip().lower() != "end of month":
-            last_group = g.strip()
-        label = f"{last_group} — {s.strip()}" if s and s.strip() else last_group
+        if g and _clean(g) and _clean(g).lower() != "end of month":
+            last_group = _clean(g)
+        label = f"{last_group} — {_clean(s)}" if s and _clean(s) else last_group
         composite.append(label)
 
     out: dict = {label: {} for label in composite if label and label != "_date"}
@@ -425,6 +519,7 @@ def read_full_history(xlsx_bytes: bytes) -> dict[str, dict[str, float]]:
         date_label = str(date_cell).strip()
         if not date_label or not _MONTH_LABEL_RE.match(date_label):
             continue
+        key = _normalize_date(date_label) if iso_dates else date_label
         for i, val in enumerate(row):
             if i >= len(composite):
                 continue
@@ -432,7 +527,7 @@ def read_full_history(xlsx_bytes: bytes) -> dict[str, dict[str, float]]:
             if not label or label == "_date" or val is None:
                 continue
             if isinstance(val, (int, float)):
-                out[label][date_label] = float(val)
+                out[label][key] = float(val)
     return {k: v for k, v in out.items() if v}
 ```
 
@@ -441,25 +536,31 @@ def read_full_history(xlsx_bytes: bytes) -> dict[str, dict[str, float]]:
 ### End-to-end: latest M1 / M2 / M3 print
 
 ```python
-# Step 1 (agent does this once, via MCP):
-#   firecrawl_scrape_page(url="https://www.centralbank.ae/en/research-and-statistics/")
-# Pass the returned markdown to this skill:
-index = parse_bulletin_index(scraped_markdown)
-sb = index["Statistical Bulletin - Banking & Monetary Statistics"][0]   # most recent
+# Step 1 (agent does this once, via MCP). The format MUST be rawHtml.
+#   firecrawl_scrape_page(
+#       url="https://www.centralbank.ae/en/research-and-statistics/",
+#       formats=["rawHtml"],
+#   )
+# Pass the returned rawHtml to this skill:
+index = parse_bulletin_index(scraped_rawhtml)
+sb = index["Statistical Bulletin - Banking & Monetary Statistics"][-1]   # most recent
 print(f"Latest bulletin: {sb['month']}")
 
 # Step 2: download the XLSX (no auth, direct).
 xlsx = download_bulletin(sb["xlsx_url"])
 
-# Step 3: pull the monetary aggregates.
+# Step 3: pull the monetary aggregates. Sheet name uses fuzzy resolution,
+# so '1-Sel Ind' works the same as the bulletin's literal '1-Sel Ind ' (trailing space).
 for ind in ["Money Supply M1", "Money Supply M2", "Money Supply M3"]:
-    series = read_series(xlsx, "1-Sel Ind ", ind)
-    latest_month = list(series)[-1]
-    print(f"  {ind} ({latest_month}): AED {series[latest_month]/1000:.1f}B")
-# Example output (from April 2026 bulletin, data through Feb 2026):
-#   Money Supply M1 (Feb 2026): AED 1095.7B
-#   Money Supply M2 (Feb 2026): AED 2823.5B
-#   Money Supply M3 (Feb 2026): AED 3344.2B
+    series = read_series(xlsx, "1-Sel Ind", ind)
+    latest = list(series)[-1]
+    print(f"  {ind} ({latest}): AED {series[latest]/1000:.1f}B")
+# Example output (validated against the April 2026 bulletin):
+#   Money Supply M1 (2026-04): AED 1064.3B
+#   Money Supply M2 (2026-04): AED 2870.4B
+#   Money Supply M3 (2026-04): AED 3407.7B
+# Note ISO-style date keys ('2026-04') — pass iso_dates=False to read_series
+# if you need the original 'Apr 2026 *' labels back.
 ```
 
 ### Central Bank balance sheet and gross reserves
@@ -591,7 +692,7 @@ Compared with Finnhub's UAE macro feed, where CPI is stuck at 2023-12-31 and 8-y
 
 ## Usage rules
 
-- **Two-step discovery + download.** Step 1 is `firecrawl_scrape_page` on `https://www.centralbank.ae/en/research-and-statistics/` to get the current landing page. Step 2 passes the resulting markdown to `parse_bulletin_index` to extract XLSX URLs, then calls `download_bulletin` to fetch them. Do NOT call urllib directly on the HTML landing page — it returns Cloudflare 403.
+- **Two-step discovery + download.** Step 1 is `firecrawl_scrape_page(url=..., formats=["rawHtml"])` on `https://www.centralbank.ae/en/research-and-statistics/` — the `rawHtml` format is mandatory; the default `markdown` format silently drops every XLSX URL on this site. Step 2 passes the returned rawHtml to `parse_bulletin_index`, then calls `download_bulletin` on each URL. Do NOT call urllib directly on the HTML landing page — it returns Cloudflare 403.
 - **Direct urllib on `/media/<hash>/<file>.xlsx` is fine** — no auth, no headers, no Cloudflare on the data files themselves. The skill helpers use only stdlib + openpyxl.
 - **All AED values in millions** unless the sheet's `(In Millions of AED)` header says otherwise. Divide by `1000` to get billions for headline reporting (e.g. `M2 ≈ AED 2823B`), and **always quote the as-of month** since CBUAE prints recent months as preliminary (`*` suffix).
 - **Use list_indicators first** when reading from a sheet you have not used before — sheet labels can have minor wording variations across bulletin vintages, and the substring match on `read_series` will pick the first row matching your substring. Confirm the label before quoting a number.
