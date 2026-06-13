@@ -33,7 +33,7 @@ cat > /home/sandbox/.config/opencode/opencode.json <<EOF
         "minimax/minimax-m2.7": {
           "options": {
             "provider": {
-              "order": ["Mara", "SambaNova", "Fireworks"],
+              "order": ["mara", "sambanova", "fireworks"],
               "allow_fallbacks": true
             }
           }
@@ -101,7 +101,7 @@ cat > /home/sandbox/.config/opencode/opencode.json <<EOF
         "moonshotai/kimi-k2.6": {
           "options": {
             "provider": {
-              "order": ["Parasail", "Baidu", "WandB", "Moonshot AI"],
+              "order": ["parasail", "baidu", "wandb", "moonshotai"],
               "allow_fallbacks": true
             }
           }
