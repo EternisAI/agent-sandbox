@@ -30,6 +30,14 @@ cat > /home/sandbox/.config/opencode/opencode.json <<EOF
             }
           }
         },
+        "minimax/minimax-m2.7": {
+          "options": {
+            "provider": {
+              "order": ["Mara", "SambaNova", "Fireworks"],
+              "allow_fallbacks": true
+            }
+          }
+        },
         "anthropic/claude-opus-4.7": {
           "options": {
             "reasoning": { "effort": "high" },
@@ -90,7 +98,14 @@ cat > /home/sandbox/.config/opencode/opencode.json <<EOF
         "google/gemini-3.5-flash": {
           "options": { "reasoning": { "effort": "high" } }
         },
-        "moonshotai/kimi-k2.6": {},
+        "moonshotai/kimi-k2.6": {
+          "options": {
+            "provider": {
+              "order": ["Parasail", "Baidu", "WandB", "Moonshot AI"],
+              "allow_fallbacks": true
+            }
+          }
+        },
         "z-ai/glm-5.1": {},
         "deepseek/deepseek-v4-pro": {}
       }
