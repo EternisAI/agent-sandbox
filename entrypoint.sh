@@ -18,7 +18,7 @@ cat > /home/sandbox/.config/opencode/opencode.json <<EOF
       "options": {
         "baseURL": "$PROXY_BASE_URL",
         "apiKey": "$PROXY_API_KEY",
-        "timeout": 180000,
+        "timeout": 600000,
         "chunkTimeout": 120000
       },
       "models": {
