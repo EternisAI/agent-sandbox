@@ -18,7 +18,7 @@ cat > /home/sandbox/.config/opencode/opencode.json <<EOF
       "options": {
         "baseURL": "$PROXY_BASE_URL",
         "apiKey": "$PROXY_API_KEY",
-        "timeout": 180000,
+        "timeout": 600000,
         "chunkTimeout": 120000
       },
       "models": {
@@ -26,6 +26,14 @@ cat > /home/sandbox/.config/opencode/opencode.json <<EOF
           "options": {
             "provider": {
               "order": ["mara"],
+              "allow_fallbacks": true
+            }
+          }
+        },
+        "minimax/minimax-m2.7": {
+          "options": {
+            "provider": {
+              "order": ["mara", "sambanova", "fireworks"],
               "allow_fallbacks": true
             }
           }
@@ -90,7 +98,14 @@ cat > /home/sandbox/.config/opencode/opencode.json <<EOF
         "google/gemini-3.5-flash": {
           "options": { "reasoning": { "effort": "high" } }
         },
-        "moonshotai/kimi-k2.6": {},
+        "moonshotai/kimi-k2.6": {
+          "options": {
+            "provider": {
+              "order": ["parasail", "baidu", "wandb", "moonshotai"],
+              "allow_fallbacks": true
+            }
+          }
+        },
         "z-ai/glm-5.1": {},
         "deepseek/deepseek-v4-pro": {}
       }
