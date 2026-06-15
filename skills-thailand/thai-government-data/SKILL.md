@@ -1,6 +1,6 @@
 ---
 name: thai-government-data
-description: Query official Thai-government data at the source — TWO CKAN portals, both reached through the sandbox's Thai egress proxy. (1) data.go.th — the national open-data catalog of ~39,000 datasets from ~1,000 agencies (every ministry, department, province, state enterprise): population/census, public health, education, agriculture and rice/crop output, transport and accidents, energy, tourism arrivals, labor, budget, procurement, registries, geographic data. (2) catalog.parliament.go.th — the Parliament/legislative catalog: bills and the bill-consideration pipeline (ร่างพระราชบัญญัติ, with sponsor + political party + status), Acts (พระราชบัญญัติ), Organic Acts, Royal Decrees (พระราชกฤษฎีกา), Emergency Decrees (พระราชกำหนด), parliamentary questions/interpellations (กระทู้ถาม), constitutional-court rulings and judgments, and the Constitution. Use this for ANY question needing official Thai statistics, registries, legislation, parliamentary proceedings/bill-tracking, or government records. Both portals speak the standard CKAN Action API (full-text search in Thai or English, dataset metadata, structured DataStore as JSON + SQL). ~15,000 resources on data.go.th are PDFs — route those to the pdf-reader. This skill ships only in the Thai-government sandbox image.
+description: Query official Thai-government data at the source — TWO CKAN portals, both reached through the Axion backend's Thai egress proxy (the same backend-proxy path every Axion data tool uses). (1) data.go.th — the national open-data catalog of ~39,000 datasets from ~1,000 agencies (every ministry, department, province, state enterprise): population/census, public health, education, agriculture and rice/crop output, transport and accidents, energy, tourism arrivals, labor, budget, procurement, registries, geographic data. (2) catalog.parliament.go.th — the Parliament/legislative catalog: bills and the bill-consideration pipeline (ร่างพระราชบัญญัติ, with sponsor + political party + status), Acts (พระราชบัญญัติ), Organic Acts, Royal Decrees (พระราชกฤษฎีกา), Emergency Decrees (พระราชกำหนด), parliamentary questions/interpellations (กระทู้ถาม), constitutional-court rulings and judgments, and the Constitution. Use this for ANY question needing official Thai statistics, registries, legislation, parliamentary proceedings/bill-tracking, or government records. Both portals speak the standard CKAN Action API (full-text search in Thai or English, dataset metadata, structured DataStore as JSON + SQL). ~15,000 resources on data.go.th are PDFs — route those to the pdf-reader. This skill ships only in the Thai-government sandbox image.
 allowed-tools: Bash(python3 -c *), Bash(python3 - *), Bash(python3 *)
 ---
 
@@ -8,7 +8,7 @@ allowed-tools: Bash(python3 -c *), Bash(python3 - *), Bash(python3 *)
 
 Two official Thai-government **CKAN** portals, both at `/api/3/action/<action>`
 returning `{"success": true/false, "result": ...}`, both reached through the
-same Thai egress proxy:
+Axion backend's Thai egress proxy:
 
 | Portal key | Host | What's there |
 |---|---|---|
@@ -21,23 +21,24 @@ same Thai egress proxy:
 ## Egress and proxy model (read this — it prevents the #1 error)
 
 Both portals sit behind a Cloudflare WAF that returns `403` to any non-Thai IP,
-so the sandbox **cannot reach them directly**. Every request goes through the
-Thai egress proxy, whose full endpoint (with credentials) is injected as the
-environment variable **`THAI_DATA_PROXY_URL`** (e.g.
-`http://<user>:<pass>@<host>:3128`). The helper installs it as a `urllib`
-proxy for you — you never build the proxy URL yourself.
+so the sandbox **cannot reach them directly**. Every request is routed through
+the **Axion backend**, exactly like every other Axion data tool (firecrawl,
+fred, …): the backend forwards the call out through the Thai egress and back. The
+egress endpoint and its credentials live in backend config and are **never**
+injected into the sandbox.
 
-- The proxy is **destination-locked to all `.go.th`** — it reaches both portals
-  *and* the federated file hosts (`*.gdcatalog.go.th`, `lis.parliament.go.th`,
-  per-agency nodes) where some resources actually live. It is **not** a general
-  proxy: any non-`.go.th` host is refused at CONNECT.
-- If `THAI_DATA_PROXY_URL` is unset, the helper raises immediately with a clear
-  message. That only happens outside the Thai-government sandbox (where this
-  skill should not exist).
+Concretely, the helper derives the proxy route from the standard sandbox env:
 
-> Forward-looking note: today `THAI_DATA_PROXY_URL` is the GCP Bangkok egress
-> proxy. The helper reads it from the environment precisely so it can later be
-> swapped to a backend-proxied route without changing any call site here.
+- **`PROXY_BASE_URL`** — the backend base (`…/api/llm-proxy`); the helper swaps
+  the suffix to `…/api/thaidata-proxy` to get the Thai-data route.
+- **`PROXY_API_KEY`** — the per-thread bearer token, sent as
+  `Authorization: Bearer <token>`. You never build either value yourself.
+
+The backend accepts any **`.go.th`** host, so it reaches both portals *and* the
+federated file hosts (`*.gdcatalog.go.th`, `lis.parliament.go.th`, per-agency
+nodes) where some resources actually live; non-`.go.th` hosts are refused. If
+`PROXY_BASE_URL`/`PROXY_API_KEY` are unset, the helper raises immediately — that
+only happens outside an Axion sandbox.
 
 ## Helper
 
@@ -65,51 +66,65 @@ UA = "AxionThaiAgent/1.0"
 _RETRYABLE_HTTP = {429, 500, 502, 503, 504}
 
 
-def _proxy_url() -> str:
-    """The Thai egress proxy endpoint (with basic-auth creds), injected by the
-    Thai-government sandbox as THAI_DATA_PROXY_URL. Both portals are geo-blocked,
-    so every request must go through it."""
-    url = os.environ.get("THAI_DATA_PROXY_URL")
-    if not url:
+def _backend_base() -> str:
+    """The backend's Thai-data proxy route, derived from PROXY_BASE_URL exactly
+    like every other Axion data tool. The backend forwards each call out through
+    the Thai egress; no egress credential is ever exposed to the sandbox."""
+    base = os.environ.get("PROXY_BASE_URL")
+    if not base:
         raise RuntimeError(
-            "THAI_DATA_PROXY_URL is not set. Thai government data is geo-blocked and "
-            "must be reached through the Thai egress proxy — this skill only works "
-            "inside the Thai-government sandbox image."
+            "PROXY_BASE_URL is not set. Thai government data is geo-blocked and is "
+            "reached through the Axion backend proxy — this skill only works inside "
+            "an Axion sandbox."
         )
-    return url
+    return base.rstrip("/").replace("/api/llm-proxy", "/api/thaidata-proxy")
 
 
-def _opener() -> urllib.request.OpenerDirector:
-    p = _proxy_url()
-    return urllib.request.build_opener(
-        urllib.request.ProxyHandler({"http": p, "https": p})
-    )
+def _token() -> str:
+    tok = os.environ.get("PROXY_API_KEY")
+    if not tok:
+        raise RuntimeError("PROXY_API_KEY is not set; cannot authenticate to the Axion backend proxy.")
+    return tok
 
 
-def _http(url: str, *, data: bytes | None = None, headers: dict | None = None,
+def proxied(target: str) -> str:
+    """Backend-proxy URL for any upstream .go.th URL — use this to fetch a
+    resource file (CSV/XLSX/PDF) linked from a dataset. Rewrites
+    'https://data.go.th/x?q=1' to '<backend>/data.go.th/x?q=1'. Fetch it yourself
+    adding the header 'Authorization: Bearer <PROXY_API_KEY>'."""
+    u = urllib.parse.urlsplit(target)
+    out = f"{_backend_base()}/{u.netloc}{u.path}"
+    return out + ("?" + u.query if u.query else "")
+
+
+def _http(target: str, *, data: bytes | None = None, headers: dict | None = None,
           timeout: int = 90, retries: int = 3) -> str:
-    """GET (or POST if `data`) through the proxy, with retry+backoff on transient
-    errors. Returns the decoded body. Raises RuntimeError with a clear message on
-    a non-retryable HTTP error, a WAF/HTML error page, or persistent failure."""
+    """GET (or POST if `data`) an upstream .go.th URL through the backend proxy,
+    with retry+backoff on transient errors. Returns the decoded body. Raises
+    RuntimeError with a clear message on a non-retryable HTTP error or persistent
+    failure."""
+    url = proxied(target)
+    hdrs = dict(headers or {})
+    hdrs["Authorization"] = "Bearer " + _token()
     method = "POST" if data is not None else "GET"
     last = None
     for attempt in range(1, retries + 1):
         try:
-            req = urllib.request.Request(url, data=data, headers=headers or {}, method=method)
-            with _opener().open(req, timeout=timeout) as r:
+            req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
+            with urllib.request.urlopen(req, timeout=timeout) as r:
                 return r.read().decode("utf-8", "replace")
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", "replace")[:200]
             if e.code not in _RETRYABLE_HTTP:
-                # 403 here usually means the proxy isn't engaged or the host is
-                # outside .go.th; 404 means a bad action/id.
-                raise RuntimeError(f"HTTP {e.code} for {url[:90]} — {body}")
+                # 401/403 here means the backend rejected auth or the host isn't
+                # .go.th; 404 means a bad action/id.
+                raise RuntimeError(f"HTTP {e.code} for {target[:90]} — {body}")
             last = f"HTTP {e.code}: {body}"
         except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
             last = f"{type(e).__name__}: {e}"
         if attempt < retries:
             time.sleep(1.5 * attempt)  # 1.5s, 3.0s backoff
-    raise RuntimeError(f"Request failed after {retries} attempts: {url[:90]} — {last}")
+    raise RuntimeError(f"Request failed after {retries} attempts: {target[:90]} — {last}")
 
 
 def ckan(action: str, *, portal: str = DEFAULT_PORTAL, post: bool = False,
@@ -135,7 +150,7 @@ def ckan(action: str, *, portal: str = DEFAULT_PORTAL, post: bool = False,
     except json.JSONDecodeError:
         raise RuntimeError(
             f"{action} on '{portal}' did not return JSON — likely a proxy/WAF error "
-            f"page (is THAI_DATA_PROXY_URL set and is the host a .go.th domain?). "
+            f"page (is the backend proxy reachable and the host a .go.th domain?). "
             f"First 160 chars: {text[:160]!r}"
         )
     if not resp.get("success"):
@@ -249,9 +264,10 @@ def parliament_rows(slug: str, *, limit: int = 100, offset: int = 0,
 
 ## How to avoid errors (do this and most calls just work)
 
-1. **The proxy is mandatory.** Every call needs `THAI_DATA_PROXY_URL`; the helper
-   handles it. A `403`/non-JSON error almost always means the proxy isn't
-   engaged or you aimed at a non-`.go.th` host.
+1. **The backend proxy is mandatory.** Every call routes through the backend via
+   `PROXY_BASE_URL` + `PROXY_API_KEY`; the helper handles both. A `401`/`403`/
+   non-JSON error almost always means the backend rejected auth or you aimed at a
+   non-`.go.th` host.
 2. **Pick the right portal.** Legislation/parliament → `parliament`; everything
    else → `data.go.th`. Don't search data.go.th for bills — use the parliament
    slugs below.
@@ -265,14 +281,16 @@ def parliament_rows(slug: str, *, limit: int = 100, offset: int = 0,
 5. **Quote the resource_id in SQL**: `FROM "<resource_id>"` (double quotes), and
    always add a `LIMIT`.
 6. **`datastore_query` only works on `datastore_active` resources.** For others,
-   download the resource `url` through the proxy and parse the file. `parliament_rows`
-   resolves the right resource for you and raises a clear message if none exists.
+   fetch the resource `url` via `proxied(url)` (adding the `Authorization: Bearer
+   <PROXY_API_KEY>` header) and parse the file. `parliament_rows` resolves the
+   right resource for you and raises a clear message if none exists.
 7. **Paginate** with `start`/`offset`; use `rows=0`/`limit=0` to get counts or
    field lists cheaply.
 8. **Buddhist-Era years.** Many fields use พ.ศ. (BE = CE + 543), e.g. 2567 = 2024.
-9. **PDF resources** → hand the `url` to the **pdf-reader** plugin; don't parse
-   PDFs here. Many Thai government PDFs are scans (pdf-reader's image fallback
-   handles them).
+9. **PDF resources** → download the PDF via `proxied(url)` (with the bearer
+   header) to a local file, then hand that file to the **pdf-reader** plugin;
+   don't parse PDFs here. Many Thai government PDFs are scans (pdf-reader's image
+   fallback handles them).
 
 ## Parliament catalog (catalog.parliament.go.th) — fixed slug map
 

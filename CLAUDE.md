@@ -36,10 +36,12 @@ docker build -f Dockerfile.thailand \
 ```
 
 CI: `.github/workflows/build-thailand.yml` runs after the default "Build and
-Push" workflow succeeds and overlays that same commit's base image. At runtime
-the Thai sandbox must inject `THAI_DATA_PROXY_URL` (the Thai egress proxy
-endpoint, with creds) so `thai-government-data` can reach the geo-blocked
-`.go.th` portals.
+Push" workflow succeeds and overlays that same commit's base image. The
+`thai-government-data` skill reaches the geo-blocked `.go.th` portals through the
+Axion backend's Thai egress proxy (`/api/thaidata-proxy`), using the standard
+`PROXY_BASE_URL` / `PROXY_API_KEY` env every sandbox already gets — no
+Thai-specific runtime env is required. The backend egress endpoint and its
+credentials live in backend config (`thaidata.proxyUrl`), never in this image.
 
 ## Versioning
 
