@@ -1,0 +1,30 @@
+# Thai-government agent-sandbox image.
+#
+# This is the default agent-sandbox image plus the Thailand-only skills (today:
+# `thai-government-data`, covering the data.go.th and Parliament CKAN portals).
+# It is built as a THIN OVERLAY on the published
+# default image so the two never drift — the only delta is one extra skills dir.
+# The Thailand skills deliberately live in `skills-thailand/` (NOT `skills/`), so
+# the default image's `COPY skills/ ...` never picks them up and they ship ONLY
+# in this image.
+#
+# Build locally:
+#   docker build -f Dockerfile.thailand \
+#     --build-arg BASE_IMAGE=ghcr.io/eternisai/agent-sandbox:<tag> \
+#     -t ghcr.io/<owner>/agent-sandbox-thailand:<tag> .
+#
+# At runtime the Thai sandbox must inject THAI_DATA_PROXY_URL (the Thai egress
+# proxy endpoint, with creds) so the thai-government-data skill can reach the
+# geo-blocked .go.th portals.
+
+ARG BASE_IMAGE=ghcr.io/eternisai/agent-sandbox:latest
+FROM ${BASE_IMAGE}
+
+# Overlay the Thailand-only skills into the same dir the OpenCode runtime scans.
+COPY --chown=sandbox:sandbox skills-thailand/ /home/sandbox/.agents/skills/
+
+# Mirror the base image's executable-bit fixup for any helper scripts the
+# overlay ships (no-op today; the datagoth skill is SKILL.md-only).
+RUN find /home/sandbox/.agents/skills -name "*.sh" -o -name "*.py" | xargs -r chmod +x
+
+# USER, WORKDIR, EXPOSE, and ENTRYPOINT are inherited unchanged from the base.
