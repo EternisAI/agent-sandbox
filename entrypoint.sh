@@ -7,6 +7,20 @@ set -e
 mkdir -p /data/opencode /data/workspaces
 export OPENCODE_DB=/data/opencode/opencode.db
 
+# When a self-hosted backend pins agents to a single model serving name (e.g. a
+# vLLM model), operators set LLM_AGENT_MODEL on the backend and it is injected
+# into this container as AXION_AGENT_MODEL. OpenCode resolves a model only if it
+# is in this provider map or the models.dev catalog, so an arbitrary serving
+# name must be declared here or every agent fails with "Model not found:
+# openrouter/<name>" before any inference. Declared with empty options so it is
+# sent as a plain request. Unset (the Eternis-hosted default) leaves only the
+# models baked in below. jq encodes the name as a JSON string key so a value
+# containing quotes or backslashes can't corrupt opencode.json.
+EXTRA_MODEL_ENTRY=""
+if [ -n "$AXION_AGENT_MODEL" ]; then
+  EXTRA_MODEL_ENTRY="$(jq -n --arg m "$AXION_AGENT_MODEL" '$m'): {},"
+fi
+
 cat > /home/sandbox/.config/opencode/opencode.json <<EOF
 {
   "permission": "allow",
@@ -22,6 +36,7 @@ cat > /home/sandbox/.config/opencode/opencode.json <<EOF
         "chunkTimeout": 120000
       },
       "models": {
+        $EXTRA_MODEL_ENTRY
         "minimax/minimax-m2.5:nitro": {
           "options": {
             "provider": {
