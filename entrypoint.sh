@@ -7,6 +7,18 @@ set -e
 mkdir -p /data/opencode /data/workspaces
 export OPENCODE_DB=/data/opencode/opencode.db
 
+# A self-hosted backend may pin agents to a single model serving name (e.g. a
+# vLLM model) via LLM_AGENT_MODEL. OpenCode resolves a model only if it is in
+# this provider map or the models.dev catalog, so an arbitrary serving name
+# must be declared here or every agent fails with "Model not found:
+# openrouter/<name>" before any inference. Declared with empty options so it is
+# sent as a plain request. Unset (the Eternis-hosted default) leaves only the
+# models baked in below.
+EXTRA_MODEL_ENTRY=""
+if [ -n "$AXION_AGENT_MODEL" ]; then
+  EXTRA_MODEL_ENTRY="\"$AXION_AGENT_MODEL\": {},"
+fi
+
 cat > /home/sandbox/.config/opencode/opencode.json <<EOF
 {
   "permission": "allow",
@@ -22,6 +34,7 @@ cat > /home/sandbox/.config/opencode/opencode.json <<EOF
         "chunkTimeout": 120000
       },
       "models": {
+        $EXTRA_MODEL_ENTRY
         "minimax/minimax-m2.5:nitro": {
           "options": {
             "provider": {
