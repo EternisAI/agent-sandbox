@@ -65,6 +65,7 @@ import os
 import re
 import json
 import time
+import html as _h
 import urllib.request
 import urllib.parse
 import urllib.error
@@ -308,11 +309,10 @@ def _sniff_ext(b: bytes) -> str:
     return "img"
 
 
-def _html_to_markdown(html: str) -> str:
+def _html_to_markdown(html_text: str) -> str:
     """Best-effort HTML→Markdown (stdlib only). <figure> blocks and <img> tags are
     replaced, in document order, by @@FIG{n}@@ placeholders the caller fills with
     local image links. Good enough for an LLM to read; not a strict converter."""
-    import html as _h
     n = [0]
 
     def _ph(_m):
@@ -320,24 +320,24 @@ def _html_to_markdown(html: str) -> str:
         n[0] += 1
         return f"\n\n@@FIG{i}@@\n\n"
 
-    html = re.sub(r"(?is)<(script|style|svg).*?</\1>", "", html)
-    html = re.sub(r"(?is)<figure\b.*?</figure>", _ph, html)
-    html = re.sub(r"(?is)<img\b[^>]*>", _ph, html)
+    html_text = re.sub(r"(?is)<(script|style|svg).*?</\1>", "", html_text)
+    html_text = re.sub(r"(?is)<figure\b.*?</figure>", _ph, html_text)
+    html_text = re.sub(r"(?is)<img\b[^>]*>", _ph, html_text)
     strip = lambda s: _h.unescape(re.sub(r"<[^>]+>", "", s)).strip()
     for lvl in range(1, 7):
-        html = re.sub(rf"(?is)<h{lvl}[^>]*>(.*?)</h{lvl}>",
-                      lambda m, l=lvl: f"\n\n{'#' * l} {strip(m.group(1))}\n", html)
-    html = re.sub(r"(?is)<li[^>]*>(.*?)</li>", lambda m: f"\n- {strip(m.group(1))}", html)
-    html = re.sub(r"(?is)<blockquote[^>]*>(.*?)</blockquote>",
-                  lambda m: "\n\n> " + strip(m.group(1)).replace("\n", "\n> ") + "\n", html)
-    html = re.sub(r'(?is)<a\b[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
-                  lambda m: f"[{strip(m.group(2))}]({m.group(1)})", html)
-    html = re.sub(r"(?is)</p\s*>", "\n\n", html)
-    html = re.sub(r"(?is)<br\s*/?>", "\n", html)
-    html = re.sub(r"(?is)<hr\b[^>]*>", "\n\n---\n\n", html)
-    html = re.sub(r"(?s)<[^>]+>", "", html)
-    html = _h.unescape(html)
-    return re.sub(r"\n{3,}", "\n\n", html).strip()
+        html_text = re.sub(rf"(?is)<h{lvl}[^>]*>(.*?)</h{lvl}>",
+                           lambda m, l=lvl: f"\n\n{'#' * l} {strip(m.group(1))}\n", html_text)
+    html_text = re.sub(r"(?is)<li[^>]*>(.*?)</li>", lambda m: f"\n- {strip(m.group(1))}", html_text)
+    html_text = re.sub(r"(?is)<blockquote[^>]*>(.*?)</blockquote>",
+                       lambda m: "\n\n> " + strip(m.group(1)).replace("\n", "\n> ") + "\n", html_text)
+    html_text = re.sub(r'(?is)<a\b[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
+                       lambda m: f"[{strip(m.group(2))}]({m.group(1)})", html_text)
+    html_text = re.sub(r"(?is)</p\s*>", "\n\n", html_text)
+    html_text = re.sub(r"(?is)<br\s*/?>", "\n", html_text)
+    html_text = re.sub(r"(?is)<hr\b[^>]*>", "\n\n---\n\n", html_text)
+    html_text = re.sub(r"(?s)<[^>]+>", "", html_text)
+    html_text = _h.unescape(html_text)
+    return re.sub(r"\n{3,}", "\n\n", html_text).strip()
 
 
 def download_post(post_id: int, out_dir: str | None = None, *, max_images: int = 50) -> dict:
