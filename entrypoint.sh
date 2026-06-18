@@ -19,7 +19,7 @@ cat > /home/sandbox/.config/opencode/opencode.json <<EOF
         "baseURL": "$PROXY_BASE_URL",
         "apiKey": "$PROXY_API_KEY",
         "timeout": 600000,
-        "chunkTimeout": 120000
+        "chunkTimeout": 300000
       },
       "models": {
         "minimax/minimax-m2.5:nitro": {
