@@ -1,0 +1,200 @@
+# Deploy (Thailand) — GitOps image-pin bump for the siam-ai install.
+#
+# Pins the agent-sandbox-thailand image (tag + digest) in the gitops-siam-ai
+# repo so Flux reconciles the new image onto the oa1-siam cluster. This repo
+# only PUBLISHES images (build*.yml / release.yml); the cluster pulls what this
+# workflow writes to gitops.
+#
+# Two entry points:
+#   - workflow_run : after "Release (promote tag)" finished publishing the Thai
+#                    semver image, deploy that exact version. The released tag
+#                    is read from that run's `deploy-info-siam-ai` artifact (the
+#                    handoff release.yml uploads); the digest is then re-resolved
+#                    from GHCR, which stays the source of truth.
+#   - workflow_dispatch : deploy a chosen tag. Leave `image_tag` empty to deploy
+#                    the branch's moving tag (latest for main, <slug> otherwise),
+#                    or set it to an exact tag (e.g. 0.3.0, sha-abc1234, latest).
+#
+# Either way the digest is resolved from the registry and the run FAILS if no
+# such image exists — we never pin a tag that isn't actually published.
+#
+# The values.yaml edit is a surgical awk line-replace (NOT yq): that file is
+# human-maintained with comments and alignment that `yq -i` would reflow, so we
+# replace only the tag:/digest: lines in the block anchored by the sandbox
+# image's `repository:` line and leave the rest of the document byte-for-byte.
+name: Deploy (Thailand)
+
+on:
+  workflow_run:
+    workflows: ["Release (promote tag)"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Thai image tag to deploy (empty = this branch's tag: latest on main, else <slug>)"
+        required: false
+        default: ""
+
+# Serialize deploys so a manual dispatch and an auto (workflow_run) deploy don't
+# push conflicting pins; never cancel one mid-push (the git rebase-retry below
+# tolerates a lost race, but a half-finished push should still complete).
+concurrency:
+  group: deploy-thailand
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  GITOPS_REPO: EternisAI/gitops-siam-ai
+  GITOPS_BRANCH: main
+  TARGET_FILE: apps/clusters/oa1/axion/app/release/values.yaml
+
+jobs:
+  deploy:
+    # workflow_run fires on success AND failure — only deploy a successful
+    # release. dispatch always proceeds.
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    # The fine-grained GITOPS_PAT (Contents:write on gitops-siam-ai) is scoped to
+    # this GitHub Environment; without `environment:` it resolves empty and the
+    # gitops checkout fails. Create the "Axion Siam.AI" environment in THIS repo
+    # with a GITOPS_PAT secret — it is NOT shared with axionhypothesis's env.
+    environment: "Axion Siam.AI"
+    permissions:
+      contents: read   # default token; the gitops push uses GITOPS_PAT, not this
+      packages: read    # oras reads the Thai image manifest from GHCR
+      actions: read     # download-artifact reads the triggering run's artifact
+
+    steps:
+      # workflow_run only: pull the released tag out of the release run's
+      # deploy-info-siam-ai artifact (uploaded by release.yml).
+      - name: Download release deploy-info
+        if: ${{ github.event_name == 'workflow_run' }}
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: deploy-info-siam-ai
+          path: deploy-info
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: oras-project/setup-oras@38de303aac69abb66f3e6255b7198bff35f323e3 # v2.0.0
+
+      # oras reads ~/.docker/config.json, which docker/login-action writes — so
+      # the manifest fetch below is authenticated against GHCR with no extra login.
+      - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve target image
+        id: resolve
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.image_tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # GHCR path is lowercase; the Thai image is the repo image + -thailand.
+          # This is also the `repository:` value used in values.yaml (registry is
+          # a separate field there), so it doubles as the awk anchor.
+          repo="$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')-thailand"
+          slugify() { echo "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's#[^a-z0-9._-]+#-#g; s#^[._-]+##; s#[._-]+$##' | cut -c1-128; }
+
+          case "${EVENT}" in
+            workflow_run)
+              # The released semver, straight from release.yml's handoff artifact.
+              tag="$(jq -r '.tag' deploy-info/siam-ai.json)"
+              ;;
+            workflow_dispatch)
+              if [ -n "${INPUT_TAG}" ]; then
+                tag="${INPUT_TAG}"
+              elif [ "${REF_NAME}" = "main" ]; then
+                tag="latest"
+              else
+                tag="$(slugify "${REF_NAME}")"
+              fi
+              ;;
+          esac
+          if [ -z "${tag:-}" ] || [ "${tag}" = "null" ]; then
+            echo "::error::Could not determine an image tag to deploy."
+            exit 1
+          fi
+
+          # Registry is the source of truth: resolve the tag -> digest and fail
+          # if the image isn't actually published.
+          ref="${REGISTRY}/${repo}:${tag}"
+          if ! desc="$(oras manifest fetch --descriptor "${ref}" 2>/dev/null)"; then
+            echo "::error::No image found at ${ref} — nothing to deploy."
+            exit 1
+          fi
+          digest="$(echo "${desc}" | jq -r '.digest')"
+          echo "Resolved ${ref} -> ${digest}"
+          {
+            echo "repo=${repo}"
+            echo "tag=${tag}"
+            echo "digest=${digest}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout gitops repo
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ env.GITOPS_REPO }}
+          ref: ${{ env.GITOPS_BRANCH }}
+          token: ${{ secrets.GITOPS_PAT }}
+          path: .gitops
+          fetch-depth: 1
+          # Keep the PAT in .git/config — the push step below needs it.
+          persist-credentials: true
+
+      - name: Commit & push image pin
+        working-directory: .gitops
+        env:
+          BRANCH: ${{ env.GITOPS_BRANCH }}
+          TARGET_FILE: ${{ env.TARGET_FILE }}
+          REPO: ${{ steps.resolve.outputs.repo }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+          DIGEST: ${{ steps.resolve.outputs.digest }}
+        run: |
+          set -euo pipefail
+          git config user.name "Eternis DevOps Bot"
+          git config user.email "devops+github@eternis.ai"
+
+          # Set the tag:/digest: lines in the values block anchored by the exact
+          # `repository: <repo>` line. Surgical line edit — preserves the file's
+          # comments, indentation and blank lines (yq -i would reflow the doc).
+          apply_image_pin() {
+            awk -v repo="$1" -v newtag="$2" -v newdigest="$3" '
+              $0 ~ ("^[[:space:]]*repository:[[:space:]]+" repo "[[:space:]]*$") { inblk=1; dt=0; dd=0 }
+              inblk && !dt && $0 ~ /^[[:space:]]*tag:[[:space:]]/ {
+                match($0, /^[[:space:]]*tag:[[:space:]]*/); print substr($0,1,RLENGTH) "\"" newtag "\""; dt=1; if (dt && dd) inblk=0; next }
+              inblk && !dd && $0 ~ /^[[:space:]]*digest:[[:space:]]/ {
+                match($0, /^[[:space:]]*digest:[[:space:]]*/); print substr($0,1,RLENGTH) "\"" newdigest "\""; dd=1; if (dt && dd) inblk=0; next }
+              { print }
+            ' "$4" > "$4.tmp" && mv "$4.tmp" "$4"
+          }
+
+          # Rebase-retry loop: a concurrent gitops push (other CD, or a racing
+          # dispatch) can reject ours. The edit is surgical + idempotent, so on a
+          # rejected (non-fast-forward) push we re-fetch the tip and re-apply.
+          for attempt in 1 2 3 4 5; do
+            git fetch --quiet origin "$BRANCH"
+            git reset --quiet --hard "origin/$BRANCH"
+
+            apply_image_pin "$REPO" "$TAG" "$DIGEST" "$TARGET_FILE"
+
+            if git diff --quiet -- "$TARGET_FILE"; then
+              echo "No change needed — ${REPO} already pinned to ${TAG} (${DIGEST})."
+              exit 0
+            fi
+
+            git add "$TARGET_FILE"
+            git commit --quiet -m "chore(siam-ai): bump ${REPO} to ${TAG}"
+            if git push origin "HEAD:$BRANCH"; then
+              echo "Pushed pin ${REPO} ${TAG} (${DIGEST}) to ${BRANCH}."
+              exit 0
+            fi
+            echo "Push rejected (concurrent update). Retry ${attempt}…"
+            sleep $((attempt * 3))
+          done
+          echo "::error::Failed to push to ${BRANCH} after 5 attempts."
+          exit 1

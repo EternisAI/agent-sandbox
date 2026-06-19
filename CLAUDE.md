@@ -65,22 +65,46 @@ Still works for ad-hoc builds (CI handles the versioned tags automatically):
 docker buildx build --platform linux/amd64 -t ghcr.io/eternisai/agent-sandbox:<tag> --push .
 ```
 
-## Deployment (GitOps — forthcoming)
+## Deployment (GitOps)
 
-Deployment is performed by separate workflows (a GitOps repo integration) and
-is **not** part of this repo's build/release workflows — those only publish
-images. To support it, each producing job emits a small **`deploy-info`
-artifact** (JSON: `image`, `tag`, `digest`, `git_sha`, `ref`, `environment`)
-that a downstream deploy workflow reads to substitute the image tag + digest in
-the target Kubernetes manifest:
+Deployment is a **separate concern** from the build/release workflows, which
+only publish images. A deploy is a GitOps push: bump the image tag + digest in a
+manifest in the target GitOps repo, commit as the Eternis DevOps Bot, push back,
+and let Flux reconcile it onto the cluster. To support this handoff, each
+producing job emits a small **`deploy-info` artifact** (JSON: `image`, `tag`,
+`digest`, `git_sha`, `ref`, `environment`):
 
-| Source | Image | Environment |
-|--------|-------|-------------|
-| `build.yml` (main push) | `agent-sandbox` | `staging` |
-| `release.yml` (regular) | `agent-sandbox` | `production` |
-| `release.yml` (thai) | `agent-sandbox-thailand` | `siam-ai` |
+| Source | Image | Environment | Deploy workflow |
+|--------|-------|-------------|-----------------|
+| `build.yml` (main push) | `agent-sandbox` | `staging` | forthcoming |
+| `release.yml` (regular) | `agent-sandbox` | `production` | forthcoming |
+| `release.yml` (thai) | `agent-sandbox-thailand` | `siam-ai` | **`deploy-thailand.yml`** |
 
-Notes for whoever wires up the deploy workflows:
+### `deploy-thailand.yml` — Thai image → `siam-ai` (implemented)
+
+Pins `agent-sandbox-thailand` in the `EternisAI/gitops-siam-ai` repo
+(`apps/clusters/oa1/axion/app/release/values.yaml`, keys
+`axion.sandbox.image.tag` / `.digest`). Two entry points:
+
+- **`workflow_run`** after "Release (promote tag)" succeeds — reads the released
+  semver from that run's `deploy-info-siam-ai` artifact, then re-resolves the
+  digest from GHCR.
+- **`workflow_dispatch`** — deploys `inputs.image_tag` if set, else the
+  dispatch branch's moving tag (`latest` on main, `<slug>` otherwise).
+
+The digest is always resolved from the registry (source of truth) and the run
+**fails if the tag isn't published** — it never pins a non-existent image. The
+`values.yaml` edit is a surgical `awk` line-replace anchored on the sandbox
+image's `repository:` line, **not `yq`**: that file is human-maintained with
+comments and alignment that `yq -i` would reflow. The edit is idempotent (a
+re-run with the same pin is a no-op) and the push uses a rebase-retry loop to
+survive a concurrent gitops push. It runs in the **`Axion Siam.AI`** GitHub
+Environment (in THIS repo), which holds the `GITOPS_PAT` secret (fine-grained,
+Contents:write on the gitops repo). No reconcile-watch is performed here (unlike
+the axionhypothesis CD action) — that would add `KUBE_API_*` secrets +
+`id-token` and is out of scope.
+
+Notes for whoever wires up the remaining (staging / production) deploy workflows:
 
 - The **registry is the source of truth** — `digest` is always re-resolvable
   from a tag via `oras resolve`, and images outlive artifacts. The artifact is
@@ -91,15 +115,14 @@ Notes for whoever wires up the deploy workflows:
 - Deploys should pin by **digest** (`sha-<short>`/`<ver>` + `@sha256:…`), never
   the mutable `latest`. Builds set `provenance: false` / `sbom: false` so each
   push is a clean single-platform manifest with one stable digest.
-- The Thai image for a specific branch (`latest` for main, `<slug>` for a
-  feature branch built via dispatch) can be deployed to `siam-ai` by a manual
-  deploy dispatch that resolves the tag → digest on demand.
 - The fine-grained PAT used to push to the GitOps repo belongs in a **GitHub
   Environment** secret on the deploy workflow — never in these build workflows
-  or this image.
+  or this image. (`deploy-thailand.yml` already does this with `GITOPS_PAT` in
+  the `Axion Siam.AI` environment; production/staging will each want their own.)
 - The `deploy-info` artifact is produced with `actions/upload-artifact@v7`, so a
   deploy workflow that reads it must use `actions/download-artifact@v7` (upload
-  and download artifacts are not compatible across majors).
+  and download artifacts are not compatible across majors) — as
+  `deploy-thailand.yml` does on its `workflow_run` path.
 
 ## Skills
 
@@ -138,9 +161,10 @@ credentials live in backend config (`thaidata.proxyUrl`), never in this image.
 - Cut a release by pushing a `vX.Y.Z` git tag; `release.yml` promotes the
   built image to the `X.Y.Z` image tag. Reference released images by the
   versioned tag (and ideally its digest), never `:latest`.
-- After a release, update the deployed tag — via the GitOps repo (forthcoming)
-  or, today, the tag in `backend-go/application.yaml` in the `axionhypothesis`
-  repo.
+- After a release, the deployed tag is updated: the **Thai** image auto-deploys
+  to `siam-ai` via `deploy-thailand.yml` (GitOps push to `gitops-siam-ai`); the
+  **regular** image's deploy is still forthcoming — today its tag lives in
+  `backend-go/application.yaml` in the `axionhypothesis` repo.
 - Pin all tool versions in the Dockerfile (opencode-ai, Node.js, pnpm, uv, etc.).
 
 ## Build context
