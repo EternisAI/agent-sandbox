@@ -1,80 +1,143 @@
+# Continuous build of the Thai-government overlay image
+# (agent-sandbox-thailand): the default image plus the Thailand-only skills in
+# skills-thailand/ (Dockerfile.thailand overlays them onto an ARG-templated
+# base). Like build.yml this has NO tag trigger — semver releases of the Thai
+# image are handled by release.yml.
+#
+# Three entry points, one job:
+#   - workflow_run : after "Build and Push" rebuilt the base on this commit,
+#                    overlay that exact base (sha-<short>) and mirror its tags.
+#   - push         : Thai skills changed but the base did not — overlay the
+#                    current published base (`latest`). A guard skips this when
+#                    base-image paths also changed (the workflow_run path will
+#                    rebuild off the fresh base instead, avoiding a duplicate
+#                    build that would otherwise overlay a stale `latest`).
+#   - workflow_dispatch : overlay an explicitly chosen base tag.
 name: Build and Push (Thailand)
-
-# Builds the Thai-government sandbox image: the default agent-sandbox plus the
-# Thailand-only skills (Dockerfile.thailand overlays `skills-thailand/`). It runs
-# AFTER the default "Build and Push" workflow succeeds so the base image it
-# overlays already exists, and pins the base to that same commit's `sha-` tag.
-# This keeps the Thai skill out of the default image while shipping it in a
-# separate, optional image.
 
 on:
   workflow_run:
     workflows: ["Build and Push"]
     types: [completed]
+    # No `branches:` filter — gate on conclusion (and, implicitly, on the base
+    # having actually built) inside the job. workflow_run.head_branch is
+    # unreliable, so we don't filter on it.
+  push:
     branches: [main]
+    paths:
+      - 'skills-thailand/**'
+      - 'Dockerfile.thailand'
+      - '.github/workflows/build-thailand.yml'
   workflow_dispatch:
     inputs:
       base_tag:
-        description: "Default agent-sandbox tag to overlay (e.g. latest, 0.3.0, sha-abc1234)"
+        description: "agent-sandbox base tag to overlay (e.g. latest, sha-abc1234)"
         default: latest
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.workflow_run.head_sha || github.ref }}
+  cancel-in-progress: true
 
 env:
   REGISTRY: ghcr.io
-  # Separate image name: <owner>/agent-sandbox-thailand.
-  IMAGE_NAME: ${{ github.repository }}-thailand
-  BASE_IMAGE_NAME: eternisai/agent-sandbox
 
 jobs:
   build:
-    # workflow_run: only proceed if the base build succeeded. workflow_dispatch
-    # always proceeds.
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    # workflow_run: only proceed if the base build succeeded. push/dispatch:
+    # always enter; the resolve step decides whether to actually build.
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          # Build from the same commit the base image was built from.
+          # Build from the same commit the base image was built from on the
+          # workflow_run path; otherwise the pushed / dispatched ref.
           ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 
-      - uses: docker/setup-buildx-action@v3
+      # push only: did base-image paths also change in this push? If so, defer
+      # to the chained workflow_run (which overlays the freshly built base).
+      - name: Detect base-relevant changes
+        if: ${{ github.event_name == 'push' }}
+        id: basepaths
+        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        with:
+          filters: |
+            base:
+              - 'Dockerfile'
+              - 'skills/**'
+              - 'plugins/**'
+              - 'agent/**'
+              - 'entrypoint.sh'
 
-      - uses: docker/login-action@v3
+      - name: Resolve build parameters
+        id: resolve
+        env:
+          EVENT: ${{ github.event_name }}
+          WR_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          WR_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          BASE_PATHS_CHANGED: ${{ steps.basepaths.outputs.base }}
+          INPUT_BASE_TAG: ${{ inputs.base_tag }}
+        run: |
+          set -euo pipefail
+          image="${REGISTRY}/$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          thai="${image}-thailand"
+          proceed=true
+          slugify() { echo "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's#[^a-z0-9._-]+#-#g; s#^[._-]+##; s#[._-]+$##' | cut -c1-128; }
+          case "${EVENT}" in
+            workflow_run)
+              short="$(echo "${WR_HEAD_SHA}" | cut -c1-7)"
+              base_ref="${image}:sha-${short}"
+              if [ "${WR_HEAD_BRANCH}" = "main" ]; then moving="latest"; else moving="$(slugify "${WR_HEAD_BRANCH}")"; fi
+              ;;
+            push)
+              # Only build if base paths did NOT change (else defer to workflow_run).
+              if [ "${BASE_PATHS_CHANGED}" = "true" ]; then proceed=false; fi
+              short="${GITHUB_SHA::7}"
+              base_ref="${image}:latest"
+              moving="latest"
+              ;;
+            workflow_dispatch)
+              short="${GITHUB_SHA::7}"
+              base_ref="${image}:${INPUT_BASE_TAG}"
+              if [ "${GITHUB_REF_NAME}" = "main" ]; then moving="latest"; else moving="$(slugify "${GITHUB_REF_NAME}")"; fi
+              ;;
+          esac
+          {
+            echo "proceed=${proceed}"
+            echo "thai=${thai}"
+            echo "base_ref=${base_ref}"
+            echo "short=${short}"
+            echo "moving=${moving}"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        if: ${{ steps.resolve.outputs.proceed == 'true' }}
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        if: ${{ steps.resolve.outputs.proceed == 'true' }}
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Resolve base image tag
-        id: base
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_run" ]; then
-            short="$(git rev-parse --short=7 '${{ github.event.workflow_run.head_sha }}')"
-            echo "ref=sha-${short}" >> "$GITHUB_OUTPUT"
-          else
-            echo "ref=${{ inputs.base_tag }}" >> "$GITHUB_OUTPUT"
-          fi
-
-      - uses: docker/metadata-action@v5
-        id: meta
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=sha
-
-      - uses: docker/build-push-action@v5
+      - name: Build and push (overlay)
+        if: ${{ steps.resolve.outputs.proceed == 'true' }}
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: Dockerfile.thailand
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
           platforms: linux/amd64
+          push: true
           build-args: |
-            BASE_IMAGE=${{ env.REGISTRY }}/${{ env.BASE_IMAGE_NAME }}:${{ steps.base.outputs.ref }}
+            BASE_IMAGE=${{ steps.resolve.outputs.base_ref }}
+          tags: |
+            ${{ steps.resolve.outputs.thai }}:sha-${{ steps.resolve.outputs.short }}
+            ${{ steps.resolve.outputs.thai }}:${{ steps.resolve.outputs.moving }}
+          provenance: false
+          sbom: false
           cache-from: type=gha
           cache-to: type=gha,mode=max

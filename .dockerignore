@@ -1,0 +1,23 @@
+# Keep the build context small and stable. This file is SHARED by both
+# Dockerfile and Dockerfile.thailand (same `context: .`), so it must NOT
+# exclude skills-thailand/ (the Thai overlay COPYs it) or the Dockerfiles
+# themselves (buildx reads Dockerfile.thailand from the context via `file:`).
+# Only exclude paths that NEITHER image COPYs.
+
+# VCS / CI / repo metadata
+.git
+.github
+.gitignore
+.dockerignore
+
+# Docs and scratch dirs (root *.md only — does NOT match skills/**/SKILL.md)
+*.md
+docs/
+plans/
+temp_scripts/
+
+# Local env / OS cruft
+.env
+.env.*
+.DS_Store
+**/.DS_Store
