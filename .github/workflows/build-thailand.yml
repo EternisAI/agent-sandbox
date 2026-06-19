@@ -60,6 +60,9 @@ jobs:
           # Build from the same commit the base image was built from on the
           # workflow_run path; otherwise the pushed / dispatched ref.
           ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+          # Only docker push (via login-action) follows — never git; keep
+          # GITHUB_TOKEN out of .git/config.
+          persist-credentials: false
 
       # push only: did base-image paths also change in this push? If so, defer
       # to the chained workflow_run (which overlays the freshly built base).
