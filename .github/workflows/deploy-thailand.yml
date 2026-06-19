@@ -36,7 +36,7 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: "Thai image tag to deploy (empty = this branch's image, pinned to its immutable sha- tag; or an exact tag e.g. 0.3.0)"
+        description: "Thai image tag to deploy — empty = this branch's image (pinned to its immutable sha- tag); or an exact immutable tag (sha-<commit> or X.Y.Z)"
         required: false
         default: ""
 
@@ -118,7 +118,15 @@ jobs:
               ;;
             workflow_dispatch)
               if [ -n "${INPUT_TAG}" ]; then
-                tag="${INPUT_TAG}"                 # explicit choice — pin as given
+                # Explicit input is pinned as-is, so it must already be immutable:
+                # a sha-<commit> build tag or an X.Y.Z release tag. Reject a
+                # mutable tag (latest, a branch slug) — to deploy a branch's
+                # image leave image_tag empty (de-referenced to its sha- below).
+                if [[ ! "${INPUT_TAG}" =~ ^(sha-[0-9a-f]{7,40}|[0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+                  echo "::error::image_tag '${INPUT_TAG}' is not immutable (expected sha-<commit> or X.Y.Z). Leave image_tag empty to deploy a branch's image, pinned to its sha- tag."
+                  exit 1
+                fi
+                tag="${INPUT_TAG}"
               elif [ "${REF_NAME}" = "main" ]; then
                 tag="latest"; moving=true
               else
