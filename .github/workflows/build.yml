@@ -59,6 +59,13 @@ jobs:
         id: meta
         run: |
           set -euo pipefail
+          # Releases go through release.yml (push a vX.Y.Z tag -> promote the
+          # sha-<short> image to <ver>). Dispatching this workflow on a tag ref
+          # would instead build a v-prefixed slug tag and bypass that promote.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "::error::Do not dispatch this workflow for a tag (${GITHUB_REF_NAME}). Push a vX.Y.Z git tag to trigger release.yml, or dispatch from a branch."
+            exit 1
+          fi
           # GHCR requires a lowercase image path; ${{ github.repository }} may
           # contain uppercase (EternisAI/...), so lowercase it explicitly.
           image="${REGISTRY}/$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"

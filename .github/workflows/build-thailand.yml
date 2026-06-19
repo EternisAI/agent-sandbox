@@ -12,7 +12,10 @@
 #                    base-image paths also changed (the workflow_run path will
 #                    rebuild off the fresh base instead, avoiding a duplicate
 #                    build that would otherwise overlay a stale `latest`).
-#   - workflow_dispatch : overlay an explicitly chosen base tag.
+#   - workflow_dispatch : overlay an explicitly chosen base tag, tagging the
+#                    result with the dispatch branch's moving tag. Run it from a
+#                    branch, NEVER a tag — semver Thai images come from
+#                    release.yml (a tag-ref dispatch is rejected in resolve).
 name: Build and Push (Thailand)
 
 on:
@@ -31,7 +34,7 @@ on:
   workflow_dispatch:
     inputs:
       base_tag:
-        description: "agent-sandbox base tag to overlay (e.g. latest, sha-abc1234)"
+        description: "agent-sandbox base tag to overlay (e.g. latest, sha-abc1234). Run from a branch; semver images come from release.yml."
         default: latest
 
 concurrency:
@@ -101,6 +104,13 @@ jobs:
               moving="latest"
               ;;
             workflow_dispatch)
+              # Dispatch is for branch overlays only. On a tag ref the output
+              # would be a v-prefixed slug (e.g. v0.3.0) overlaying the wrong
+              # base and bypassing release.yml's promote — reject it.
+              if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+                echo "::error::Do not dispatch this workflow for a tag (${GITHUB_REF_NAME}). Semver Thai images are produced by release.yml when you push a vX.Y.Z git tag (it promotes agent-sandbox-thailand:sha-<short> -> <ver>). Re-run this dispatch from a branch."
+                exit 1
+              fi
               short="${GITHUB_SHA::7}"
               base_ref="${image}:${INPUT_BASE_TAG}"
               if [ "${GITHUB_REF_NAME}" = "main" ]; then moving="latest"; else moving="$(slugify "${GITHUB_REF_NAME}")"; fi
