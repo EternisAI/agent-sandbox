@@ -1,0 +1,205 @@
+# Release: promote the CI-built images to a semver tag.
+#
+# Triggered by pushing a `vX.Y.Z` git tag. The git tag's leading `v` is
+# stripped for the image tag (v0.3.0 -> 0.3.0), matching CLAUDE.md and the
+# backend `application.yaml` references.
+#
+# Promotion (oras tag) over rebuild: a plain `oras tag` adds the version tag to
+# the EXACT manifest CI already built (and that staging tested), so the
+# released bytes are identical and immune to dependency drift from the
+# Dockerfile's floating pins (nodejs=24.7.*, unpinned apt). A full build only
+# happens as a fallback when the commit's `sha-` image doesn't exist (e.g. a
+# commit whose base build never ran).
+#
+# The Thai image mirrors the regular image's mode so its overlay always sits on
+# the exact regular image being released:
+#   - regular promoted AND thai:sha-<short> exists -> promote thai too
+#   - otherwise                                     -> rebuild thai off agent-sandbox:<ver>
+#
+# No tag trigger lives in build.yml / build-thailand.yml; releases flow only
+# through here.
+name: Release (promote tag)
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+# Never cancel a release mid-flight; distinct tags get distinct groups.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - uses: oras-project/setup-oras@38de303aac69abb66f3e6255b7198bff35f323e3 # v2.0.0
+
+      # docker/login-action writes ~/.docker/config.json, which oras reads by
+      # default — so oras is authenticated against GHCR without a separate login.
+      - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve names
+        id: meta
+        run: |
+          set -euo pipefail
+          image="${REGISTRY}/$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          {
+            echo "image=${image}"
+            echo "thai=${image}-thailand"
+            echo "short=${GITHUB_SHA::7}"
+            echo "ver=${GITHUB_REF_NAME#v}"
+          } >> "$GITHUB_OUTPUT"
+
+      # ---- Regular image: promote the existing sha- image, else fall back to build.
+      - name: Promote regular image
+        id: regular
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          SHORT: ${{ steps.meta.outputs.short }}
+          VER: ${{ steps.meta.outputs.ver }}
+        run: |
+          set -euo pipefail
+          if oras manifest fetch --descriptor "${IMAGE}:sha-${SHORT}" >/dev/null 2>&1; then
+            echo "sha-${SHORT} exists -> promoting to ${VER} (no rebuild)"
+            oras tag "${IMAGE}:sha-${SHORT}" "${VER}"
+            digest="$(oras manifest fetch --descriptor "${IMAGE}:${VER}" | jq -r .digest)"
+            {
+              echo "mode=promoted"
+              echo "digest=${digest}"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "sha-${SHORT} missing -> will build"
+            echo "mode=build" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build regular image (fallback)
+        id: regular_build
+        if: ${{ steps.regular.outputs.mode == 'build' }}
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          # No :latest here. The moving `latest` tag is managed solely by
+          # build.yml (main CI); a release must not move it, since the tagged
+          # commit may not be main's tip. This mirrors the promote path above,
+          # which only adds the :<ver> tag and leaves latest untouched.
+          tags: |
+            ${{ steps.meta.outputs.image }}:sha-${{ steps.meta.outputs.short }}
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.ver }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Resolve regular digest
+        id: regular_digest
+        env:
+          PROMOTED_DIGEST: ${{ steps.regular.outputs.digest }}
+          BUILT_DIGEST: ${{ steps.regular_build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [ -n "${PROMOTED_DIGEST}" ]; then d="${PROMOTED_DIGEST}"; else d="${BUILT_DIGEST}"; fi
+          echo "digest=${d}" >> "$GITHUB_OUTPUT"
+
+      # ---- Thai overlay: mirror the regular image's mode.
+      - name: Promote thai image
+        id: thai
+        env:
+          THAI: ${{ steps.meta.outputs.thai }}
+          SHORT: ${{ steps.meta.outputs.short }}
+          VER: ${{ steps.meta.outputs.ver }}
+          REGULAR_MODE: ${{ steps.regular.outputs.mode }}
+        run: |
+          set -euo pipefail
+          # Promotion is only valid when the regular image was promoted (so the
+          # existing thai:sha overlays that exact regular:sha) AND thai:sha
+          # actually exists. Otherwise rebuild off agent-sandbox:<ver>.
+          if [ "${REGULAR_MODE}" = "promoted" ] && oras manifest fetch --descriptor "${THAI}:sha-${SHORT}" >/dev/null 2>&1; then
+            echo "promoting ${THAI}:sha-${SHORT} -> ${VER} (no rebuild)"
+            oras tag "${THAI}:sha-${SHORT}" "${VER}"
+            digest="$(oras manifest fetch --descriptor "${THAI}:${VER}" | jq -r .digest)"
+            {
+              echo "mode=promoted"
+              echo "digest=${digest}"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "thai promotion not possible -> will rebuild overlay off agent-sandbox:${VER}"
+            echo "mode=build" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build thai image (fallback)
+        id: thai_build
+        if: ${{ steps.thai.outputs.mode == 'build' }}
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          file: Dockerfile.thailand
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            BASE_IMAGE=${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.ver }}
+          tags: |
+            ${{ steps.meta.outputs.thai }}:sha-${{ steps.meta.outputs.short }}
+            ${{ steps.meta.outputs.thai }}:${{ steps.meta.outputs.ver }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Resolve thai digest
+        id: thai_digest
+        env:
+          PROMOTED_DIGEST: ${{ steps.thai.outputs.digest }}
+          BUILT_DIGEST: ${{ steps.thai_build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [ -n "${PROMOTED_DIGEST}" ]; then d="${PROMOTED_DIGEST}"; else d="${BUILT_DIGEST}"; fi
+          echo "digest=${d}" >> "$GITHUB_OUTPUT"
+
+      # ---- deploy-info for the (separate) production + siam-ai deploy workflows.
+      - name: Write deploy-info
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          THAI: ${{ steps.meta.outputs.thai }}
+          VER: ${{ steps.meta.outputs.ver }}
+          REG_DIGEST: ${{ steps.regular_digest.outputs.digest }}
+          THAI_DIGEST: ${{ steps.thai_digest.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p deploy-info
+          cat > deploy-info/production.json <<EOF
+          { "image": "${IMAGE}", "tag": "${VER}", "digest": "${REG_DIGEST}", "git_sha": "${GITHUB_SHA}", "ref": "${GITHUB_REF}", "environment": "production" }
+          EOF
+          cat > deploy-info/siam-ai.json <<EOF
+          { "image": "${THAI}", "tag": "${VER}", "digest": "${THAI_DIGEST}", "git_sha": "${GITHUB_SHA}", "ref": "${GITHUB_REF}", "environment": "siam-ai" }
+          EOF
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: deploy-info-production
+          path: deploy-info/production.json
+          retention-days: 7
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: deploy-info-siam-ai
+          path: deploy-info/siam-ai.json
+          retention-days: 7

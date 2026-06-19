@@ -13,6 +13,11 @@
 #     --build-arg BASE_IMAGE=ghcr.io/eternisai/agent-sandbox:<tag> \
 #     -t ghcr.io/<owner>/agent-sandbox-thailand:<tag> .
 #
+# BASE_IMAGE is ARG-templated (default `latest`) because three callers drive it:
+#   - build-thailand.yml workflow_run  -> agent-sandbox:sha-<short> (fresh base)
+#   - build-thailand.yml push/dispatch -> agent-sandbox:latest (or a chosen tag)
+#   - release.yml                       -> agent-sandbox:<ver> (the released base)
+#
 # The thai-government-data skill reaches the geo-blocked .go.th portals through
 # the Axion backend's Thai egress proxy, using the standard PROXY_BASE_URL /
 # PROXY_API_KEY env that every sandbox already gets — no Thai-specific runtime

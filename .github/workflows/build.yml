@@ -1,13 +1,41 @@
+# Continuous build of the default agent-sandbox image.
+#
+# Triggers on `main` pushes (path-scoped to files that actually go into the
+# image) and manual dispatch. Deliberately has NO tag trigger: semver releases
+# are handled by release.yml, which PROMOTES the already-built `sha-` image to
+# the version tag. Keeping tags out of this workflow lets `paths:` filtering
+# work correctly (a tag push usually introduces zero changed files, so a
+# `paths:`-filtered tag trigger would be silently skipped).
+#
+# Tags pushed:
+#   - sha-<short>  always — the immutable per-commit handle deploys pin to
+#   - latest       on main
+#   - <branch-slug> on a manual dispatch from a feature branch
+#
+# After a successful run, build-thailand.yml (workflow_run) overlays the Thai
+# skills onto this exact commit's base image.
 name: Build and Push
 
 on:
   push:
     branches: [main]
+    paths:
+      - 'Dockerfile'
+      - 'skills/**'
+      - 'plugins/**'
+      - 'agent/**'
+      - 'entrypoint.sh'
+      - '.github/workflows/build.yml'
   workflow_dispatch:
+
+# Supersede an in-flight build when a newer commit lands on the same ref, so
+# the moving tag (latest / slug) always ends up pointing at the newest commit.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   build:
@@ -17,30 +45,87 @@ jobs:
       packages: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/metadata-action@v5
+      - name: Compute image name and tags
         id: meta
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=sha
+        run: |
+          set -euo pipefail
+          # Releases go through release.yml (push a vX.Y.Z tag -> promote the
+          # sha-<short> image to <ver>). Dispatching this workflow on a tag ref
+          # would instead build a v-prefixed slug tag and bypass that promote.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "::error::Do not dispatch this workflow for a tag (${GITHUB_REF_NAME}). Push a vX.Y.Z git tag to trigger release.yml, or dispatch from a branch."
+            exit 1
+          fi
+          # GHCR requires a lowercase image path; ${{ github.repository }} may
+          # contain uppercase (EternisAI/...), so lowercase it explicitly.
+          image="${REGISTRY}/$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          short="${GITHUB_SHA::7}"
+          if [ "${GITHUB_REF_NAME}" = "main" ]; then
+            moving="latest"
+            environment="staging"
+          else
+            # Manual dispatch from a feature branch: slugify the branch name to
+            # a valid Docker tag. Not auto-deployed (environment=none).
+            moving="$(echo "${GITHUB_REF_NAME}" | tr '[:upper:]' '[:lower:]' | sed -E 's#[^a-z0-9._-]+#-#g; s#^[._-]+##; s#[._-]+$##' | cut -c1-128)"
+            environment="none"
+          fi
+          {
+            echo "image=${image}"
+            echo "short=${short}"
+            echo "moving=${moving}"
+            echo "environment=${environment}"
+          } >> "$GITHUB_OUTPUT"
 
-      - uses: docker/build-push-action@v5
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
           platforms: linux/amd64
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: |
+            ${{ steps.meta.outputs.image }}:sha-${{ steps.meta.outputs.short }}
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.moving }}
+          # Plain single-platform manifest with one stable digest (no
+          # attestation index), which is what digest-pinned GitOps deploys want.
+          provenance: false
+          sbom: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Write deploy-info
+        run: |
+          set -euo pipefail
+          # Fast-path handoff to the (separate) staging deploy workflow. The
+          # registry remains the source of truth — `digest` is always
+          # re-resolvable from a tag via `oras resolve` — so this artifact is
+          # short-lived (see retention-days) and the deploy must tolerate its
+          # absence by reconstructing from the image.
+          mkdir -p deploy-info
+          cat > deploy-info/deploy-info.json <<EOF
+          {
+            "image": "${{ steps.meta.outputs.image }}",
+            "tag": "sha-${{ steps.meta.outputs.short }}",
+            "moving_tag": "${{ steps.meta.outputs.moving }}",
+            "digest": "${{ steps.build.outputs.digest }}",
+            "git_sha": "${GITHUB_SHA}",
+            "ref": "${GITHUB_REF}",
+            "environment": "${{ steps.meta.outputs.environment }}"
+          }
+          EOF
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: deploy-info
+          path: deploy-info/deploy-info.json
+          retention-days: 7
