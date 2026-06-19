@@ -97,9 +97,12 @@ jobs:
           context: .
           platforms: linux/amd64
           push: true
+          # No :latest here. The moving `latest` tag is managed solely by
+          # build.yml (main CI); a release must not move it, since the tagged
+          # commit may not be main's tip. This mirrors the promote path above,
+          # which only adds the :<ver> tag and leaves latest untouched.
           tags: |
             ${{ steps.meta.outputs.image }}:sha-${{ steps.meta.outputs.short }}
-            ${{ steps.meta.outputs.image }}:latest
             ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.ver }}
           provenance: false
           sbom: false
