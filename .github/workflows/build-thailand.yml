@@ -61,8 +61,11 @@ jobs:
           # workflow_run path; otherwise the pushed / dispatched ref.
           ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 
-      # push only: did base-image paths also change in this push? If so, defer
-      # to the chained workflow_run (which overlays the freshly built base).
+      # push only: will build.yml also rebuild the base for this push? If so,
+      # defer to the chained workflow_run (which overlays the freshly built
+      # base) instead of overlaying a soon-to-be-stale `latest` here. This list
+      # MUST mirror build.yml's push `paths:` exactly — including its own
+      # workflow file, which is a build.yml trigger that rebuilds the base.
       - name: Detect base-relevant changes
         if: ${{ github.event_name == 'push' }}
         id: basepaths
@@ -75,6 +78,7 @@ jobs:
               - 'plugins/**'
               - 'agent/**'
               - 'entrypoint.sh'
+              - '.github/workflows/build.yml'
 
       - name: Resolve build parameters
         id: resolve
