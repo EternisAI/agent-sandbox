@@ -12,8 +12,13 @@
 #                    handoff release.yml uploads); the digest is then re-resolved
 #                    from GHCR, which stays the source of truth.
 #   - workflow_dispatch : deploy a chosen tag. Leave `image_tag` empty to deploy
-#                    the branch's moving tag (latest for main, <slug> otherwise),
-#                    or set it to an exact tag (e.g. 0.3.0, sha-abc1234, latest).
+#                    the branch's image (main / a feature branch), or set it to
+#                    an exact tag (e.g. 0.3.0, sha-abc1234).
+#
+# What gets pinned: always an IMMUTABLE reference. A semver (workflow_run, or an
+# explicit input) is pinned as-is; an empty-input dispatch resolves the branch's
+# moving tag (latest / <slug>) and then de-references it to the sha-<short> tag
+# at the same digest — a mutable `latest` in a K8s manifest is a smell.
 #
 # Either way the digest is resolved from the registry and the run FAILS if no
 # such image exists — we never pin a tag that isn't actually published.
@@ -31,7 +36,7 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: "Thai image tag to deploy (empty = this branch's tag: latest on main, else <slug>)"
+        description: "Thai image tag to deploy — empty = this branch's image (pinned to its immutable sha- tag); or an exact immutable tag (sha-<commit> or X.Y.Z)"
         required: false
         default: ""
 
@@ -95,23 +100,37 @@ jobs:
         run: |
           set -euo pipefail
           # GHCR path is lowercase; the Thai image is the repo image + -thailand.
-          # This is also the `repository:` value used in values.yaml (registry is
-          # a separate field there), so it doubles as the awk anchor.
+          # `repo` is also the `repository:` value in values.yaml (registry is a
+          # separate field there), so it doubles as the awk anchor.
           repo="$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')-thailand"
+          image="${REGISTRY}/${repo}"
           slugify() { echo "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's#[^a-z0-9._-]+#-#g; s#^[._-]+##; s#[._-]+$##' | cut -c1-128; }
+          digest_of() { oras manifest fetch --descriptor "$1" 2>/dev/null | jq -r '.digest // empty' 2>/dev/null || true; }
 
+          # Determine the requested tag. `moving` flags a mutable tag (latest or
+          # branch slug) that must be de-referenced to an immutable sha- tag
+          # before it's pinned — a `latest` in a K8s manifest is a smell.
+          moving=false
           case "${EVENT}" in
             workflow_run)
-              # The released semver, straight from release.yml's handoff artifact.
+              # Released semver from release.yml's handoff artifact — immutable.
               tag="$(jq -r '.tag' deploy-info/siam-ai.json)"
               ;;
             workflow_dispatch)
               if [ -n "${INPUT_TAG}" ]; then
+                # Explicit input is pinned as-is, so it must already be immutable:
+                # a sha-<commit> build tag or an X.Y.Z release tag. Reject a
+                # mutable tag (latest, a branch slug) — to deploy a branch's
+                # image leave image_tag empty (de-referenced to its sha- below).
+                if [[ ! "${INPUT_TAG}" =~ ^(sha-[0-9a-f]{7,40}|[0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+                  echo "::error::image_tag '${INPUT_TAG}' is not immutable (expected sha-<commit> or X.Y.Z). Leave image_tag empty to deploy a branch's image, pinned to its sha- tag."
+                  exit 1
+                fi
                 tag="${INPUT_TAG}"
               elif [ "${REF_NAME}" = "main" ]; then
-                tag="latest"
+                tag="latest"; moving=true
               else
-                tag="$(slugify "${REF_NAME}")"
+                tag="$(slugify "${REF_NAME}")"; moving=true
               fi
               ;;
           esac
@@ -120,15 +139,39 @@ jobs:
             exit 1
           fi
 
-          # Registry is the source of truth: resolve the tag -> digest and fail
-          # if the image isn't actually published.
-          ref="${REGISTRY}/${repo}:${tag}"
-          if ! desc="$(oras manifest fetch --descriptor "${ref}" 2>/dev/null)"; then
-            echo "::error::No image found at ${ref} — nothing to deploy."
+          # Registry is the source of truth: resolve tag -> digest, fail if absent.
+          digest="$(digest_of "${image}:${tag}")"
+          if [ -z "${digest}" ]; then
+            echo "::error::No image found at ${image}:${tag} — nothing to deploy."
             exit 1
           fi
-          digest="$(echo "${desc}" | jq -r '.digest')"
-          echo "Resolved ${ref} -> ${digest}"
+
+          # De-reference a moving tag to the immutable sha- tag at the same
+          # digest. The build always pushes sha-<short> alongside the moving tag,
+          # so a match is expected to exist.
+          if [ "${moving}" = "true" ]; then
+            pin_tag=""
+            # Fast path: the dispatched commit is usually the build commit.
+            if [ "$(digest_of "${image}:sha-${GITHUB_SHA::7}")" = "${digest}" ]; then
+              pin_tag="sha-${GITHUB_SHA::7}"
+            else
+              # Fallback (e.g. HEAD built no image, so latest points further
+              # back): scan sha- tags for the one with the matching digest.
+              for t in $(oras repo tags "${image}" || true); do
+                case "${t}" in
+                  sha-*) if [ "$(digest_of "${image}:${t}")" = "${digest}" ]; then pin_tag="${t}"; break; fi ;;
+                esac
+              done
+            fi
+            if [ -z "${pin_tag}" ]; then
+              echo "::error::No immutable sha- tag points at ${image}@${digest} (moving tag '${tag}'); refusing to pin a mutable tag."
+              exit 1
+            fi
+            echo "De-referenced moving tag '${tag}' -> '${pin_tag}'"
+            tag="${pin_tag}"
+          fi
+
+          echo "Pinning ${image}:${tag} -> ${digest}"
           {
             echo "repo=${repo}"
             echo "tag=${tag}"

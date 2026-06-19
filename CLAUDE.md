@@ -90,7 +90,14 @@ Pins `agent-sandbox-thailand` in the `EternisAI/gitops-siam-ai` repo
   semver from that run's `deploy-info-siam-ai` artifact, then re-resolves the
   digest from GHCR.
 - **`workflow_dispatch`** — deploys `inputs.image_tag` if set, else the
-  dispatch branch's moving tag (`latest` on main, `<slug>` otherwise).
+  dispatch branch's image (main / a feature branch).
+
+What's pinned is always **immutable**: a semver (workflow_run or explicit input)
+is pinned as-is, but an empty-input dispatch resolves the branch's moving tag
+(`latest` / `<slug>`) and then **de-references it to the `sha-<short>` tag at the
+same digest** — a mutable `latest` in a K8s manifest is a smell. (The build
+pushes `sha-<short>` alongside every moving tag, so the match exists; the run
+fails rather than pin a mutable tag if it somehow doesn't.)
 
 The digest is always resolved from the registry (source of truth) and the run
 **fails if the tag isn't published** — it never pins a non-existent image. The
