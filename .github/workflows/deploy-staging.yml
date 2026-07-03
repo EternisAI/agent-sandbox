@@ -1,0 +1,204 @@
+# Deploy (Staging) — roll the (generic) agent-sandbox image onto consumer Axion
+# staging on the freysa-staging-use1 EKS cluster.
+#
+# This repo only PUBLISHES images (build*.yml / release.yml); the cluster runs
+# what the gitops-apps deploy pipeline pins. This workflow is the bridge: it
+# resolves the freshly built image (immutable sha- tag + GHCR digest) and
+# DISPATCHES gitops-apps/.github/workflows/axion.yaml with component=sandbox —
+# exactly how the Axion backend images reach staging (axionhypothesis
+# build-images.yaml → deploy-staging job). axion.yaml's `update` job then bumps
+# the sandbox tag:/digest: in the staging values.yaml, commits, packages the
+# tenant OCI artifact, and reconciles Flux. We do NOT commit to gitops-apps from
+# here: GITOPS_APPS_PAT is a workflow-dispatch-only PAT (Actions:write, no
+# Contents:write), shared with the axionhypothesis image workflows.
+#
+# This is the STAGING sibling of deploy-thailand.yml, which instead pushes
+# tagged RELEASES straight into gitops-siam-ai (that gitops repo is plain
+# Flux-watches-git and its PAT has Contents:write). Two differences here:
+#   - deploys the GENERIC image (no -thailand overlay); and
+#   - tracks main's continuous build (workflow_run on "Build and Push"), not
+#     semver releases — staging rides the tip of main, like every other Axion
+#     image, so each green main build of agent-sandbox rolls onto staging.
+#
+# Two entry points:
+#   - workflow_run : after "Build and Push" published a main image, deploy that
+#                    exact commit. The trigger is filtered to branches: [main]
+#                    (staging tracks main only), so the immutable sha-<short> tag
+#                    is derived straight from the built commit
+#                    (workflow_run.head_sha) and the digest resolved from GHCR
+#                    (the source of truth) — no artifact is read.
+#   - workflow_dispatch : deploy a chosen tag. Leave `image_tag` empty to deploy
+#                    the branch's image (main / a feature branch), or set it to
+#                    an exact immutable tag (sha-<commit>, or an X.Y.Z release) —
+#                    handy for a rollback.
+#
+# What gets pinned: always an IMMUTABLE reference. On workflow_run it's the
+# sha-<short> of the built commit (workflow_run.head_sha); an explicit dispatch
+# input is passed as-is (and validated immutable); an empty-input dispatch
+# resolves the branch's moving tag (latest / <slug>) and de-references it to the
+# sha-<short> tag at the same digest — a mutable `latest` in a K8s manifest is a
+# smell. The digest is always resolved from the registry and the run FAILS if no
+# such image exists, so we never dispatch a pin for a tag that isn't published.
+name: Deploy (Staging)
+
+on:
+  workflow_run:
+    workflows: ["Build and Push"]
+    types: [completed]
+    # Staging tracks main only — filter at the trigger so a feature-branch
+    # build.yml dispatch never starts a staging deploy (fail-safe; no in-job
+    # branch/environment guard needed).
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Generic image tag to deploy — empty = this branch's image (pinned to its immutable sha- tag); or an exact immutable tag (sha-<commit> or X.Y.Z)"
+        required: false
+        default: ""
+
+# Serialize deploys so a manual dispatch and an auto (workflow_run) deploy don't
+# fire conflicting pins; never cancel one mid-dispatch.
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  deploy:
+    # workflow_run fires on success AND failure — only deploy a successful
+    # build. dispatch always proceeds.
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read   # oras uses GITHUB_TOKEN; the dispatch uses GITOPS_APPS_PAT
+      packages: read    # oras reads the image manifest from GHCR
+
+    steps:
+      - name: Set up ORAS
+        uses: oras-project/setup-oras@38de303aac69abb66f3e6255b7198bff35f323e3 # v2.0.0
+
+      # oras reads ~/.docker/config.json, which docker/login-action writes — so
+      # the manifest fetch below is authenticated against GHCR with no extra login.
+      - name: Log in to GHCR
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve target image
+        id: resolve
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.image_tag }}
+          REF_NAME: ${{ github.ref_name }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          # GHCR path is lowercase; the generic image is the repo image as-is
+          # (deploy-thailand.yml appends -thailand; staging does not).
+          image="${REGISTRY}/$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          slugify() { echo "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's#[^a-z0-9._-]+#-#g; s#^[._-]+##; s#[._-]+$##' | cut -c1-128; }
+          digest_of() { oras manifest fetch --descriptor "$1" 2>/dev/null | jq -r '.digest // empty' 2>/dev/null || true; }
+
+          # Determine the requested tag. `moving` flags a mutable tag (latest or
+          # branch slug) that must be de-referenced to an immutable sha- tag
+          # before it's pinned — a `latest` in a K8s manifest is a smell.
+          moving=false
+          case "${EVENT}" in
+            workflow_run)
+              # The trigger is filtered to branches: [main], so this is always a
+              # main commit. Derive the immutable tag straight from the built
+              # commit — build.yml tags sha-<short> off the same SHA — rather
+              # than trusting build.yml's deploy-info artifact.
+              tag="sha-${HEAD_SHA::7}"
+              ;;
+            workflow_dispatch)
+              if [ -n "${INPUT_TAG}" ]; then
+                # Explicit input is passed as-is, so it must already be immutable:
+                # a sha-<commit> build tag or an X.Y.Z release tag. Reject a
+                # mutable tag (latest, a branch slug) — to deploy a branch's
+                # image leave image_tag empty (de-referenced to its sha- below).
+                if [[ ! "${INPUT_TAG}" =~ ^(sha-[0-9a-f]{7,40}|[0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+                  echo "::error::image_tag '${INPUT_TAG}' is not immutable (expected sha-<commit> or X.Y.Z). Leave image_tag empty to deploy a branch's image, pinned to its sha- tag."
+                  exit 1
+                fi
+                tag="${INPUT_TAG}"
+              elif [ "${REF_NAME}" = "main" ]; then
+                tag="latest"; moving=true
+              else
+                tag="$(slugify "${REF_NAME}")"; moving=true
+              fi
+              ;;
+          esac
+          if [ -z "${tag:-}" ] || [ "${tag}" = "null" ]; then
+            echo "::error::Could not determine an image tag to deploy."
+            exit 1
+          fi
+
+          # Registry is the source of truth: resolve tag -> digest, fail if absent.
+          digest="$(digest_of "${image}:${tag}")"
+          if [ -z "${digest}" ]; then
+            echo "::error::No image found at ${image}:${tag} — nothing to deploy."
+            exit 1
+          fi
+
+          # De-reference a moving tag to the immutable sha- tag at the same
+          # digest. The build always pushes sha-<short> alongside the moving tag,
+          # so a match is expected to exist.
+          if [ "${moving}" = "true" ]; then
+            pin_tag=""
+            # Fast path: the dispatched commit is usually the build commit.
+            if [ "$(digest_of "${image}:sha-${GITHUB_SHA::7}")" = "${digest}" ]; then
+              pin_tag="sha-${GITHUB_SHA::7}"
+            else
+              # Fallback (e.g. HEAD built no image, so latest points further
+              # back): scan sha- tags for the one with the matching digest.
+              for t in $(oras repo tags "${image}" || true); do
+                case "${t}" in
+                  sha-*) if [ "$(digest_of "${image}:${t}")" = "${digest}" ]; then pin_tag="${t}"; break; fi ;;
+                esac
+              done
+            fi
+            if [ -z "${pin_tag}" ]; then
+              echo "::error::No immutable sha- tag points at ${image}@${digest} (moving tag '${tag}'); refusing to pin a mutable tag."
+              exit 1
+            fi
+            echo "De-referenced moving tag '${tag}' -> '${pin_tag}'"
+            tag="${pin_tag}"
+          fi
+
+          echo "Will dispatch sandbox pin ${image}:${tag} -> ${digest}"
+          {
+            echo "tag=${tag}"
+            echo "digest=${digest}"
+          } >> "$GITHUB_OUTPUT"
+
+      # Dispatch the gitops-apps deploy pipeline for the sandbox component. Its
+      # `update` job pins the tag/digest in the staging values.yaml, commits,
+      # packages the tenant OCI artifact, and reconciles Flux. Same call the
+      # axionhypothesis image workflows make for server/worker/etc. Context
+      # values go through env (GitHub's script-injection hardening), not inline.
+      - name: Dispatch gitops-apps deploy (sandbox)
+        env:
+          GH_TOKEN: ${{ secrets.GITOPS_APPS_PAT }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          ACTOR: ${{ github.actor }}
+          ACTOR_ID: ${{ github.actor_id }}
+          REF_NAME: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+          DIGEST: ${{ steps.resolve.outputs.digest }}
+        run: |
+          set -euo pipefail
+          echo "Dispatching axion.yaml component=sandbox (${TAG}@${DIGEST})…"
+          gh workflow run axion.yaml \
+            --repo "${REPO_OWNER}/gitops-apps" --ref main \
+            --field component=sandbox \
+            --field actor="${ACTOR}" \
+            --field actor_id="${ACTOR_ID}" \
+            --field ref_type=branch \
+            --field ref_name="${REF_NAME}" \
+            --field tag="${TAG}" \
+            --field digest="${DIGEST}"
