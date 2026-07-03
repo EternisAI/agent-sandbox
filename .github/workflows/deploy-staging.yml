@@ -22,29 +22,33 @@
 #
 # Two entry points:
 #   - workflow_run : after "Build and Push" published a main image, deploy that
-#                    exact commit. The immutable sha-<short> tag is read from that
-#                    run's `deploy-info` artifact (uploaded by build.yml); the
-#                    digest is then resolved from GHCR (the source of truth).
-#                    A non-main build (build.yml dispatched from a feature branch,
-#                    environment != staging) is skipped — staging only tracks main.
+#                    exact commit. The trigger is filtered to branches: [main]
+#                    (staging tracks main only), so the immutable sha-<short> tag
+#                    is derived straight from the built commit
+#                    (workflow_run.head_sha) and the digest resolved from GHCR
+#                    (the source of truth) — no artifact is read.
 #   - workflow_dispatch : deploy a chosen tag. Leave `image_tag` empty to deploy
 #                    the branch's image (main / a feature branch), or set it to
 #                    an exact immutable tag (sha-<commit>, or an X.Y.Z release) —
 #                    handy for a rollback.
 #
-# What gets pinned: always an IMMUTABLE reference. build.yml's deploy-info tag is
-# already the immutable sha-<short>; an explicit dispatch input is passed as-is
-# (and validated immutable); an empty-input dispatch resolves the branch's moving
-# tag (latest / <slug>) and de-references it to the sha-<short> tag at the same
-# digest — a mutable `latest` in a K8s manifest is a smell. The digest is always
-# resolved from the registry and the run FAILS if no such image exists, so we
-# never dispatch a pin for a tag that isn't actually published.
+# What gets pinned: always an IMMUTABLE reference. On workflow_run it's the
+# sha-<short> of the built commit (workflow_run.head_sha); an explicit dispatch
+# input is passed as-is (and validated immutable); an empty-input dispatch
+# resolves the branch's moving tag (latest / <slug>) and de-references it to the
+# sha-<short> tag at the same digest — a mutable `latest` in a K8s manifest is a
+# smell. The digest is always resolved from the registry and the run FAILS if no
+# such image exists, so we never dispatch a pin for a tag that isn't published.
 name: Deploy (Staging)
 
 on:
   workflow_run:
     workflows: ["Build and Push"]
     types: [completed]
+    # Staging tracks main only — filter at the trigger so a feature-branch
+    # build.yml dispatch never starts a staging deploy (fail-safe; no in-job
+    # branch/environment guard needed).
+    branches: [main]
   workflow_dispatch:
     inputs:
       image_tag:
@@ -68,22 +72,10 @@ jobs:
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     permissions:
-      contents: read   # download-artifact + oras use GITHUB_TOKEN; the dispatch uses GITOPS_APPS_PAT
+      contents: read   # oras uses GITHUB_TOKEN; the dispatch uses GITOPS_APPS_PAT
       packages: read    # oras reads the image manifest from GHCR
-      actions: read     # download-artifact reads the triggering run's artifact
 
     steps:
-      # workflow_run only: pull the built tag + environment out of build.yml's
-      # deploy-info artifact.
-      - name: Download build deploy-info
-        if: ${{ github.event_name == 'workflow_run' }}
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
-        with:
-          name: deploy-info
-          path: deploy-info
-          run-id: ${{ github.event.workflow_run.id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Set up ORAS
         uses: oras-project/setup-oras@38de303aac69abb66f3e6255b7198bff35f323e3 # v2.0.0
 
@@ -102,6 +94,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           INPUT_TAG: ${{ inputs.image_tag }}
           REF_NAME: ${{ github.ref_name }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
           # GHCR path is lowercase; the generic image is the repo image as-is
@@ -116,18 +109,11 @@ jobs:
           moving=false
           case "${EVENT}" in
             workflow_run)
-              # Staging only tracks main. build.yml stamps environment=staging on
-              # main builds and environment=none on feature-branch dispatches;
-              # skip anything that isn't a main build so a branch build can't
-              # clobber staging.
-              env_name="$(jq -r '.environment // empty' deploy-info/deploy-info.json)"
-              if [ "${env_name}" != "staging" ]; then
-                echo "::notice::Upstream build environment='${env_name}' (not 'staging') — non-main build, skipping staging deploy."
-                echo "skip=true" >> "$GITHUB_OUTPUT"
-                exit 0
-              fi
-              # Already the immutable sha-<short> — no de-referencing needed.
-              tag="$(jq -r '.tag' deploy-info/deploy-info.json)"
+              # The trigger is filtered to branches: [main], so this is always a
+              # main commit. Derive the immutable tag straight from the built
+              # commit — build.yml tags sha-<short> off the same SHA — rather
+              # than trusting build.yml's deploy-info artifact.
+              tag="sha-${HEAD_SHA::7}"
               ;;
             workflow_dispatch)
               if [ -n "${INPUT_TAG}" ]; then
@@ -196,7 +182,6 @@ jobs:
       # axionhypothesis image workflows make for server/worker/etc. Context
       # values go through env (GitHub's script-injection hardening), not inline.
       - name: Dispatch gitops-apps deploy (sandbox)
-        if: ${{ steps.resolve.outputs.skip != 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITOPS_APPS_PAT }}
           REPO_OWNER: ${{ github.repository_owner }}
