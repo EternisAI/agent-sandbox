@@ -1,0 +1,14 @@
+# agent-sandbox image for Dubai deployments: the default image plus the
+# UAE/Dubai skills in skills-dubai/. Those skills live outside skills/ so the
+# base image never ships them, and this overlay is the only image that does.
+#
+# BASE_IMAGE is an ARG so build-dubai.yml and release.yml can pin the exact base
+# they overlay (a fresh sha- build, latest, or a released version).
+
+ARG BASE_IMAGE=ghcr.io/eternisai/agent-sandbox:latest
+FROM ${BASE_IMAGE}
+
+COPY --chown=sandbox:sandbox skills-dubai/ /home/sandbox/.agents/skills/
+
+# Match the base image's chmod of overlay helper scripts.
+RUN find /home/sandbox/.agents/skills -name "*.sh" -o -name "*.py" | xargs -r chmod +x
