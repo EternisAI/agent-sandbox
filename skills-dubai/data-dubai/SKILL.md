@@ -57,15 +57,17 @@ def _raw(url, timeout=40, headers=None, max_retries=3, base_delay=1.0):
     for attempt in range(max_retries + 1):
         try:
             req = urllib.request.Request(url, headers=h)
-            r = urllib.request.urlopen(req, timeout=timeout)
-            data = r.read()
-            if r.headers.get("Content-Encoding") == "gzip":
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                data = r.read()
+                code = r.getcode()
+                gzipped = r.headers.get("Content-Encoding") == "gzip"
+            if gzipped:
                 data = gzip.decompress(data)
             if b"The requested URL was rejected" in data[:600]:
                 raise DataDubaiError(
                     "Blocked by data.dubai WAF (Request Rejected). Space out requests "
                     "and retry; this fires under rapid sequential access.")
-            return r.getcode(), data
+            return code, data
         except urllib.error.HTTPError as e:
             last = e
             if e.code in (429,) or 500 <= e.code < 600:
@@ -106,37 +108,59 @@ def search_datasets(query=None, theme=None, entity_erc=None, sort=None,
     theme      exact theme filter, e.g. 'Trade' (see list_themes())
     entity_erc issuing-entity externalReferenceCode (see list_entities())
     sort       e.g. 'dateModified:desc'
-    take/skip  paging (server max 100 per page)
+    take       max rows to return (server caps a page at 100)
+    skip       row offset; any value, not just multiples of take
     fields     restrict returned fields, e.g. 'id,title,themes'
 
     Returns {'total': int, 'items': [ {id,title,datasetName,themes,...}, ... ]}.
     """
-    page = (skip // take) + 1 if take else 1
-    params = {"page": page, "pageSize": min(take, 100)}
+    base_params = {}
     filt = []
     if theme:
         filt.append(f"themes eq '{theme}'")
     if entity_erc:
         filt.append(f"r_issuingEntityOfDataset_c_issuingEntityERC eq '{entity_erc}'")
     if filt:
-        params["filter"] = " and ".join(filt)
+        base_params["filter"] = " and ".join(filt)
     if query:
-        params["search"] = query
+        base_params["search"] = query
     if sort:
-        params["sort"] = sort
+        base_params["sort"] = sort
     if fields:
-        params["fields"] = fields
-    url = f"{BASE}/o/c/datasets?" + urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
-    code, d = _get_json(url)
-    if code != 200 or not isinstance(d, dict):
-        raise DataDubaiError(f"catalog query failed ({code})")
-    return {"total": d.get("totalCount"), "items": d.get("items", [])}
+        base_params["fields"] = fields
+
+    # The server paginates by page, not by arbitrary offset, so honor skip by
+    # fetching the pages that span [skip, skip+take) and dropping the leading
+    # remainder. Non-aligned skip just costs one extra page fetch at most.
+    page_size = min(take, 100) if take else 100
+    first_page = (skip // page_size) + 1
+    lead = skip % page_size
+    wanted = lead + take if take else None
+    collected = []
+    total = None
+    page = first_page
+    while True:
+        params = dict(base_params, page=page, pageSize=page_size)
+        url = f"{BASE}/o/c/datasets?" + urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
+        code, d = _get_json(url)
+        if code != 200 or not isinstance(d, dict):
+            raise DataDubaiError(f"catalog query failed ({code})")
+        if total is None:
+            total = d.get("totalCount")
+        batch = d.get("items", [])
+        collected.extend(batch)
+        if wanted is None or len(collected) >= wanted or len(batch) < page_size:
+            break
+        page += 1
+    items = collected[lead:wanted] if take else collected[lead:]
+    return {"total": total, "items": items}
 
 
 def get_dataset(dataset_id):
     """Full catalog record for one dataset (title, datasetName, themes, source,
     format, update frequency, dataAPIEndpoints, download counts, issuing entity)."""
-    code, d = _get_json(f"{BASE}/o/c/datasets/{dataset_id}")
+    did = urllib.parse.quote(str(dataset_id), safe="")
+    code, d = _get_json(f"{BASE}/o/c/datasets/{did}")
     if code != 200 or not isinstance(d, dict) or "id" not in d:
         raise DataDubaiError(f"dataset {dataset_id} not found ({code})")
     return d
@@ -179,7 +203,8 @@ def dataset_config(dataset_id):
     """pagination-config for a dataset. Returns {'is_open','total_records',
     'page_size_limit','download_files_page_size_limit','raw'}.
     is_open=False means the keyless path is blocked (needs the API-key channel)."""
-    code, d = _get_json(f"{BASE}/o/dda/data-services/pagination-config?datasetId={dataset_id}")
+    did = urllib.parse.quote(str(dataset_id), safe="")
+    code, d = _get_json(f"{BASE}/o/dda/data-services/pagination-config?datasetId={did}")
     if not isinstance(d, dict) or "data" not in d:
         raise DataDubaiError(f"pagination-config failed for {dataset_id} ({code})")
     cfg = d["data"]
@@ -196,7 +221,8 @@ def preview_rows(dataset_id):
     """Inline JSON preview rows (server-capped, typically <=7000). Good for a quick
     look or small datasets. For the COMPLETE dataset use fetch_dataset()/download_files().
     Some realtime datasets 404 the preview but still download; catch and fall back."""
-    code, d = _get_json(f"{BASE}/o/dda/data-services/dataset-metadata?datasetId={dataset_id}")
+    did = urllib.parse.quote(str(dataset_id), safe="")
+    code, d = _get_json(f"{BASE}/o/dda/data-services/dataset-metadata?datasetId={did}")
     if code == 404:
         raise DataDubaiError(
             f"No preview cached for {dataset_id} (HTTP 404). Use fetch_dataset() instead.")
@@ -215,7 +241,8 @@ def download_files(dataset_id, fmt="csv"):
         raise RestrictedDatasetError(
             f"Dataset {dataset_id} is not open (isOpen=false). Keyless download is "
             f"blocked; this dataset needs the Dubai Pulse API-key channel.")
-    url = f"{BASE}/o/dda/data-services/dataset-download?datasetId={dataset_id}&format={fmt}"
+    did = urllib.parse.quote(str(dataset_id), safe="")
+    url = f"{BASE}/o/dda/data-services/dataset-download?datasetId={did}&format={fmt}"
     code, d = _get_json(url)
     if not isinstance(d, dict) or not d.get("success"):
         raise DataDubaiError(f"download resolve failed for {dataset_id} ({code}): {str(d)[:150]}")
