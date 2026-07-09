@@ -198,6 +198,15 @@ jobs:
       # artifact, and reconciles Flux. Same call the axionhypothesis image
       # workflows make for server/worker/etc. Context values go through env
       # (GitHub's script-injection hardening), not inline.
+      #
+      # FIRE-AND-FORGET: `gh workflow run` only enqueues the dispatch — it does
+      # not return the triggered run's id, and this step does NOT watch it. So a
+      # green step means every environment's dispatch was ACCEPTED, not that
+      # axion.yaml (pin → OCI push → Flux reconcile) actually succeeded. Watch
+      # the real deploy outcome in gitops-apps' axion.yaml runs. (The
+      # axionhypothesis backend images use the gitops-dispatch composite action,
+      # which additionally correlates + blocks on the downstream run; this
+      # single-component sandbox path deliberately stays fire-and-forget.)
       - name: Dispatch gitops-apps deploy (sandbox)
         env:
           GH_TOKEN: ${{ secrets.GITOPS_APPS_PAT }}
