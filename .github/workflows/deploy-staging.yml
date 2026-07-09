@@ -1,24 +1,31 @@
-# Deploy (Staging) — roll the (generic) agent-sandbox image onto consumer Axion
-# staging on the freysa-staging-use1 EKS cluster.
+# Deploy (staging + branch envs) — roll the (generic) agent-sandbox image onto
+# every consumer-Axion tenant on the freysa-staging-use1 EKS cluster that runs
+# the generic image: `staging` plus branch envs like `dubai` (the `-thailand`
+# overlay is deployed separately by deploy-thailand.yml). One generic image, one
+# build, fanned out to each such tenant — the set lives in `env.ENVIRONMENTS`.
 #
 # This repo only PUBLISHES images (build*.yml / release.yml); the cluster runs
 # what the gitops-apps deploy pipeline pins. This workflow is the bridge: it
-# resolves the freshly built image (immutable sha- tag + GHCR digest) and
-# DISPATCHES gitops-apps/.github/workflows/axion.yaml with component=sandbox —
-# exactly how the Axion backend images reach staging (axionhypothesis
-# build-images.yaml → deploy-staging job). axion.yaml's `update` job then bumps
-# the sandbox tag:/digest: in the staging values.yaml, commits, packages the
-# tenant OCI artifact, and reconciles Flux. We do NOT commit to gitops-apps from
-# here: GITOPS_APPS_PAT is a workflow-dispatch-only PAT (Actions:write, no
-# Contents:write), shared with the axionhypothesis image workflows.
+# resolves the freshly built image (immutable sha- tag + GHCR digest) and, for
+# EACH target environment, DISPATCHES gitops-apps/.github/workflows/axion.yaml
+# with environment=<env> component=sandbox — exactly how the Axion backend
+# images reach staging (axionhypothesis build-images.yaml's deploy job).
+# axion.yaml's `update` job then bumps the sandbox tag:/digest: in THAT env's
+# values.yaml, commits, packages the tenant OCI artifact, and reconciles Flux.
+# Each env's run edits only its own clusters/<cluster>/<env>/axion/values.yaml
+# and reconciles under its own per-env concurrency group, so the fan-out never
+# collides. We do NOT commit to gitops-apps from here: GITOPS_APPS_PAT is a
+# workflow-dispatch-only PAT (Actions:write, no Contents:write), shared with the
+# axionhypothesis image workflows.
 #
 # This is the STAGING sibling of deploy-thailand.yml, which instead pushes
 # tagged RELEASES straight into gitops-siam-ai (that gitops repo is plain
 # Flux-watches-git and its PAT has Contents:write). Two differences here:
 #   - deploys the GENERIC image (no -thailand overlay); and
 #   - tracks main's continuous build (workflow_run on "Build and Push"), not
-#     semver releases — staging rides the tip of main, like every other Axion
-#     image, so each green main build of agent-sandbox rolls onto staging.
+#     semver releases — these tenants ride the tip of main, like every other
+#     Axion image, so each green main build of agent-sandbox rolls onto all of
+#     them.
 #
 # Two entry points:
 #   - workflow_run : after "Build and Push" published a main image, deploy that
@@ -30,7 +37,9 @@
 #   - workflow_dispatch : deploy a chosen tag. Leave `image_tag` empty to deploy
 #                    the branch's image (main / a feature branch), or set it to
 #                    an exact immutable tag (sha-<commit>, or an X.Y.Z release) —
-#                    handy for a rollback.
+#                    handy for a rollback. A dispatch rolls EVERY target env in
+#                    ENVIRONMENTS to that tag (they share the generic image); to
+#                    move just one env, dispatch gitops-apps axion.yaml directly.
 #
 # What gets pinned: always an IMMUTABLE reference. On workflow_run it's the
 # sha-<short> of the built commit (workflow_run.head_sha); an explicit dispatch
@@ -39,7 +48,7 @@
 # sha-<short> tag at the same digest — a mutable `latest` in a K8s manifest is a
 # smell. The digest is always resolved from the registry and the run FAILS if no
 # such image exists, so we never dispatch a pin for a tag that isn't published.
-name: Deploy (Staging)
+name: Deploy (staging + branch envs)
 
 on:
   workflow_run:
@@ -64,6 +73,13 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
+  # The generic (non -thailand) agent-sandbox image feeds several consumer-Axion
+  # tenants on freysa-staging-use1. Space-separated list of the gitops-apps
+  # `environment` instances to pin on each build — one axion.yaml dispatch per
+  # entry. Add a tenant here when it starts consuming the generic image; each
+  # must have a matching `- environment: <name>` on the axion ResourceSet in the
+  # central gitops repo (else there is no Flux Kustomization to reconcile).
+  ENVIRONMENTS: "staging dubai"
 
 jobs:
   deploy:
@@ -176,11 +192,21 @@ jobs:
             echo "digest=${digest}"
           } >> "$GITHUB_OUTPUT"
 
-      # Dispatch the gitops-apps deploy pipeline for the sandbox component. Its
-      # `update` job pins the tag/digest in the staging values.yaml, commits,
-      # packages the tenant OCI artifact, and reconciles Flux. Same call the
-      # axionhypothesis image workflows make for server/worker/etc. Context
-      # values go through env (GitHub's script-injection hardening), not inline.
+      # Dispatch the gitops-apps deploy pipeline for the sandbox component, once
+      # per target environment. Each axion.yaml run's `update` job pins the
+      # tag/digest in THAT env's values.yaml, commits, packages the tenant OCI
+      # artifact, and reconciles Flux. Same call the axionhypothesis image
+      # workflows make for server/worker/etc. Context values go through env
+      # (GitHub's script-injection hardening), not inline.
+      #
+      # FIRE-AND-FORGET: `gh workflow run` only enqueues the dispatch — it does
+      # not return the triggered run's id, and this step does NOT watch it. So a
+      # green step means every environment's dispatch was ACCEPTED, not that
+      # axion.yaml (pin → OCI push → Flux reconcile) actually succeeded. Watch
+      # the real deploy outcome in gitops-apps' axion.yaml runs. (The
+      # axionhypothesis backend images use the gitops-dispatch composite action,
+      # which additionally correlates + blocks on the downstream run; this
+      # single-component sandbox path deliberately stays fire-and-forget.)
       - name: Dispatch gitops-apps deploy (sandbox)
         env:
           GH_TOKEN: ${{ secrets.GITOPS_APPS_PAT }}
@@ -192,13 +218,28 @@ jobs:
           DIGEST: ${{ steps.resolve.outputs.digest }}
         run: |
           set -euo pipefail
-          echo "Dispatching axion.yaml component=sandbox (${TAG}@${DIGEST})…"
-          gh workflow run axion.yaml \
-            --repo "${REPO_OWNER}/gitops-apps" --ref main \
-            --field component=sandbox \
-            --field actor="${ACTOR}" \
-            --field actor_id="${ACTOR_ID}" \
-            --field ref_type=branch \
-            --field ref_name="${REF_NAME}" \
-            --field tag="${TAG}" \
-            --field digest="${DIGEST}"
+          # One dispatch per env in ENVIRONMENTS. Don't abort the loop on a single
+          # env's dispatch failure (`if !` shields it from `set -e`) — attempt
+          # them all, then fail the job if any failed, so a transient hiccup
+          # deploying one env can't silently skip the rest. axion.yaml serializes
+          # + reconciles each env independently (per-env values.yaml + an
+          # `axion-artifact-<env>` concurrency group), so the dispatches don't
+          # collide even when they land together.
+          rc=0
+          for environment in ${ENVIRONMENTS}; do
+            echo "Dispatching axion.yaml environment=${environment} component=sandbox (${TAG}@${DIGEST})…"
+            if ! gh workflow run axion.yaml \
+              --repo "${REPO_OWNER}/gitops-apps" --ref main \
+              --field environment="${environment}" \
+              --field component=sandbox \
+              --field actor="${ACTOR}" \
+              --field actor_id="${ACTOR_ID}" \
+              --field ref_type=branch \
+              --field ref_name="${REF_NAME}" \
+              --field tag="${TAG}" \
+              --field digest="${DIGEST}"; then
+              echo "::error::Failed to dispatch axion.yaml for environment=${environment}"
+              rc=1
+            fi
+          done
+          exit "${rc}"
