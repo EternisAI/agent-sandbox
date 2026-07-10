@@ -11,6 +11,13 @@ Direct HTTP wrapper around the public backend behind `data.dubai`, the Dubai Dat
 - **Liferay headless catalog** (`/o/c/…`): dataset records, themes, subthemes, issuing entities. Supports full-text `search`, OData `filter`, `sort`, `fields`, and paging.
 - **DDSE data-services** (`/o/dda/data-services/…`): per-dataset `pagination-config` (including the `isOpen` gate), an inline row **preview** (server-capped near 7000 rows), and **full-dataset download** through presigned `cdn.data.dubai` `.csv.gz` / `.json.gz` links. The download is uncapped; verified on a 527k-row dataset.
 
+**How it connects.** `data.dubai` and `cdn.data.dubai` sit behind an F5 WAF that rejects requests by source-IP reputation (AWS/cloud egress gets an HTML "Request Rejected" page even on HTTP 200), so every call is routed through the Axion backend, which forwards it out via a UAE egress. Two env vars, set for you inside the sandbox, drive this — you never build either value:
+
+- **`PROXY_BASE_URL`** — the backend base (`…/api/llm-proxy`); the helper swaps the suffix to `…/api/dubaidata-proxy` to get the Dubai-data route.
+- **`PROXY_API_KEY`** — the per-thread bearer token, sent as `Authorization: Bearer <token>`.
+
+If either is unset the helper raises immediately — this skill only works inside an Axion sandbox. No `data.dubai` credential is ever involved (the portal itself is keyless); the bearer authenticates the sandbox to the backend, not to Dubai.
+
 **Access gate.** A dataset's `pagination-config.isOpen`. 616 of 617 datasets are open. The closed one returns the F5 WAF "Request Rejected" page instead of data and needs the separate Dubai Pulse API-key channel, which this skill does not use. `download_files()` and `fetch_dataset()` check the gate first and raise `RestrictedDatasetError` instead of handing back a WAF page.
 
 **Data shapes.** CSV downloads parse with `csv.DictReader`. JSON comes two ways: small datasets as a pretty-printed array, large ones as NDJSON. `fetch_dataset(fmt="json")` handles both.
@@ -26,6 +33,7 @@ import csv as _csv
 import gzip
 import io
 import json
+import os
 import time
 import urllib.error
 import urllib.parse
@@ -47,12 +55,47 @@ class RestrictedDatasetError(DataDubaiError):
     """Dataset is not open (isOpen=false); needs the API-key path."""
 
 
+def _backend_base() -> str:
+    """The backend's Dubai-data proxy route, derived from PROXY_BASE_URL exactly
+    like every other Axion data tool. The backend forwards each call out through a
+    UAE egress; data.dubai sits behind an F5 WAF that rejects non-UAE source IPs,
+    so the sandbox never reaches it directly and no egress credential is ever
+    exposed to the sandbox."""
+    base = os.environ.get("PROXY_BASE_URL")
+    if not base:
+        raise DataDubaiError(
+            "PROXY_BASE_URL is not set. data.dubai is IP-restricted (its F5 WAF "
+            "rejects non-UAE addresses) and is reached through the Axion backend "
+            "proxy — this skill only works inside an Axion sandbox.")
+    return base.rstrip("/").replace("/api/llm-proxy", "/api/dubaidata-proxy")
+
+
+def _token() -> str:
+    tok = os.environ.get("PROXY_API_KEY")
+    if not tok:
+        raise DataDubaiError("PROXY_API_KEY is not set; cannot authenticate to the Axion backend proxy.")
+    return tok
+
+
+def _proxied(target: str) -> str:
+    """Rewrite an upstream data.dubai / cdn.data.dubai URL to its backend-proxy
+    path: 'https://data.dubai/o/c/datasets?x=1' -> '<backend>/data.dubai/o/c/datasets?x=1'.
+    Query string (incl. CDN presigned signatures) is preserved verbatim."""
+    u = urllib.parse.urlsplit(target)
+    out = f"{_backend_base()}/{u.netloc}{u.path}"
+    return out + ("?" + u.query if u.query else "")
+
+
 def _raw(url, timeout=40, headers=None, max_retries=3, base_delay=1.0):
     """GET with retry on 429/5xx/timeout. Returns (status, bytes).
-    Detects the F5 WAF 'Request Rejected' interstitial and raises DataDubaiError,
-    since it comes back as HTTP 200 and would otherwise look like success."""
+    Routed through the Axion backend Dubai-data proxy (UAE egress); the per-thread
+    PROXY_API_KEY is attached as a Bearer token. Detects the F5 WAF 'Request
+    Rejected' interstitial and raises DataDubaiError, since it comes back as
+    HTTP 200 and would otherwise look like success."""
     h = dict(_UA)
     h.update(headers or {})
+    h["Authorization"] = "Bearer " + _token()
+    url = _proxied(url)
     last = None
     for attempt in range(max_retries + 1):
         try:
@@ -361,8 +404,8 @@ big = fetch_dataset(461780, fmt="json", max_rows=5000)  # cap huge datasets
 
 ## Notes
 
-- **No credentials.** The open path needs none, so do not add API keys or Bearer tokens. Only `isOpen:false` datasets require Dubai's paid API-key channel, which is out of scope here.
+- **No Dubai credentials.** The open path needs no `data.dubai` key or login, so do not add one. The only `Authorization: Bearer` header is the backend `PROXY_API_KEY` (attached automatically by the helper) — that authenticates the sandbox to the Axion backend, not to Dubai. Only `isOpen:false` datasets require Dubai's paid API-key channel, which is out of scope here.
 - **Themes and entities.** 11 themes (Society, Infrastructure, Economic Sectors, Trade, Prices, Population, National Accounts, Employment, Digital Society, Quality of Life, Polls), 44 subthemes, 76 issuing entities. Some entities publish nothing yet, so join on `erc` and expect gaps.
 - **Preview vs download.** `preview_rows()` is capped near 7000 and a few realtime datasets 404 it. The download path is uncapped and more reliable, so prefer `fetch_dataset()` when you need every row. Download files are `.gz` and their links expire in about 600s; this skill fetches them immediately.
 - **Rate limiting.** The F5 WAF throttles rapid sequential access and returns a "Request Rejected" HTML page (caught and raised as `DataDubaiError`). Space calls out; the built-in retry handles transient 429/5xx.
-- **Reachability.** Verified from a France VPN exit. Reachability of `data.dubai` and `cdn.data.dubai` from the Axion sandbox egress (AWS us-east-1) is untested, and Dubai gov sites sometimes lock to UAE IPs. If calls hang or reset from a sandbox, it may need a regional egress proxy.
+- **Reachability.** `data.dubai`'s F5 WAF blocks non-UAE source IPs, so all calls route through the backend `/api/dubaidata-proxy` route (UAE egress) — see "How it connects" above. If a call returns the "Request Rejected" page (raised as `DataDubaiError`), the UAE egress IP itself is being rejected; that is a backend-side proxy/egress issue, not something this skill can retry around.

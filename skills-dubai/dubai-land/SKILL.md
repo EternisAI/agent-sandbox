@@ -79,17 +79,22 @@ def get_consumer_id(force_refresh: bool = False) -> str:
         f.write(cid)
     return cid
 
-def _dld_post(path: str, body: dict, retry_on_403: bool = True) -> dict:
+def _dld_post(path: str, body: dict, retry_on_403: bool = True, timeout: int = 90) -> dict:
     """POST to the DLD gateway with auto-resolved consumer-id.
     - 401/403 → refresh consumer-id once and retry (rotation auto-heal)
     - 429 / 5xx / timeouts → up to 3 retries with exponential backoff (via _open_with_retry)
-    The two layers are independent so a stale id + a transient blip both recover."""
+    The two layers are independent so a stale id + a transient blip both recover.
+    timeout defaults to 90s because /open-data/rents is genuinely slow — ~20s for a
+    one-week window and ~55s for multi-year ranges. The old 30s default timed out every
+    non-trivial rents query, and the retry loop then stacked three more 30s waits before
+    failing, which is what produced the multi-minute rents grind. Fast endpoints
+    (transactions return in <10s) finish well inside this ceiling, so raising it is free."""
     cid = get_consumer_id()
     data = json.dumps(body).encode()
     headers = {**_ua_headers(), "Content-Type": "application/json", "consumer-id": cid}
     req = urllib.request.Request(f"{_GATEWAY}{path}", data=data, headers=headers, method="POST")
     try:
-        return json.loads(_open_with_retry(req, timeout=30))
+        return json.loads(_open_with_retry(req, timeout=timeout))
     except urllib.error.HTTPError as e:
         if e.code in (401, 403) and retry_on_403:
             get_consumer_id(force_refresh=True)
@@ -179,7 +184,12 @@ def get_rents(date_from: str, date_to: str, area_id: str = "", usage_id: str = "
               property_type_id: str = "", is_freehold: str = "", version: str = "",
               date_type: str = "", take: int = 50, skip: int = 0,
               sort: str = "REGISTRATION_DATE_DESC") -> dict:
-    """Ejari rental contracts. Tight date ranges recommended (server times out on wide windows)."""
+    """Ejari rental contracts. This endpoint is SLOW: ~20s for a one-week window and
+    ~55s for multi-year ranges (transactions, by contrast, returns in <10s). A 30-60s
+    call is normal here, not a hang — do not kill and retry it. Query in tight windows
+    (one month at a time is a good default) and paginate with take/skip rather than
+    widening the date range; the server caps total near ~570k rows, so to cover more
+    than that you must slice by date, not raise take."""
     body = {
         "P_FROM_DATE": _fmt_date(date_from), "P_TO_DATE": _fmt_date(date_to),
         "P_DATE_TYPE": date_type, "P_IS_FREE_HOLD": is_freehold, "P_VERSION": version,
