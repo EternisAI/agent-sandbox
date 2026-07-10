@@ -1,46 +1,41 @@
-# Deploy (staging + branch envs) — roll the (generic) agent-sandbox image onto
-# every consumer-Axion tenant on the freysa-staging-use1 EKS cluster that runs
-# the generic image — the set lives in `env.ENVIRONMENTS`. Overlay images are
-# deployed separately: the `-thailand` overlay by deploy-thailand.yml and the
-# `-dubai` overlay by deploy-dubai.yml, so those envs are NOT listed here. One
-# generic image, one build, fanned out to each generic-image tenant.
+# Deploy (Dubai) — roll the agent-sandbox-dubai OVERLAY image onto the `dubai`
+# branch env on the freysa-staging-use1 EKS cluster. The Dubai env runs the
+# base sandbox + the Dubai/UAE-only skills (skills-dubai/), published as
+# agent-sandbox-dubai by build-dubai.yml — the generic agent-sandbox image no
+# longer carries those skills, so Dubai MUST ride this overlay, not the generic
+# fan-out in deploy-staging.yml (which is why `dubai` was removed from that
+# workflow's ENVIRONMENTS).
 #
 # This repo only PUBLISHES images (build*.yml / release.yml); the cluster runs
 # what the gitops-apps deploy pipeline pins. This workflow is the bridge: it
-# resolves the freshly built image (immutable sha- tag + GHCR digest) and, for
-# EACH target environment, DISPATCHES gitops-apps/.github/workflows/axion.yaml
-# with environment=<env> component=sandbox — exactly how the Axion backend
-# images reach staging (axionhypothesis build-images.yaml's deploy job).
-# axion.yaml's `update` job then bumps the sandbox tag:/digest: in THAT env's
-# values.yaml, commits, packages the tenant OCI artifact, and reconciles Flux.
-# Each env's run edits only its own clusters/<cluster>/<env>/axion/values.yaml
-# and reconciles under its own per-env concurrency group, so the fan-out never
-# collides. We do NOT commit to gitops-apps from here: GITOPS_APPS_PAT is a
-# workflow-dispatch-only PAT (Actions:write, no Contents:write), shared with the
-# axionhypothesis image workflows.
+# resolves the freshly built -dubai image (immutable sha- tag + GHCR digest) and
+# DISPATCHES gitops-apps/.github/workflows/axion.yaml with environment=dubai
+# component=sandbox-dubai — exactly how the generic image reaches staging, only
+# the component (and thus the values.yaml `repository:` anchor) differs.
+# axion.yaml's `update` job then bumps the sandbox-dubai tag:/digest: in the
+# dubai env's values.yaml, commits, packages the tenant OCI artifact, and
+# reconciles Flux. We do NOT commit to gitops-apps from here: GITOPS_APPS_PAT is
+# a workflow-dispatch-only PAT (Actions:write, no Contents:write), shared with
+# the axionhypothesis image workflows.
 #
-# This is the STAGING sibling of deploy-thailand.yml, which instead pushes
-# tagged RELEASES straight into gitops-siam-ai (that gitops repo is plain
-# Flux-watches-git and its PAT has Contents:write). Two differences here:
-#   - deploys the GENERIC image (no -thailand overlay); and
-#   - tracks main's continuous build (workflow_run on "Build and Push"), not
-#     semver releases — these tenants ride the tip of main, like every other
-#     Axion image, so each green main build of agent-sandbox rolls onto all of
-#     them.
+# This is the branch-env sibling of deploy-staging.yml. Two differences:
+#   - deploys the -dubai OVERLAY image (deploy-staging.yml deploys the generic
+#     image, deploy-thailand.yml the -thailand overlay into gitops-siam-ai); and
+#   - tracks build-dubai.yml's continuous main build (workflow_run on "Build and
+#     Push (Dubai)"), so each green main build of the Dubai overlay rolls onto
+#     the dubai env.
 #
 # Two entry points:
-#   - workflow_run : after "Build and Push" published a main image, deploy that
-#                    exact commit. The trigger is filtered to branches: [main]
-#                    (staging tracks main only), so the immutable sha-<short> tag
-#                    is derived straight from the built commit
-#                    (workflow_run.head_sha) and the digest resolved from GHCR
-#                    (the source of truth) — no artifact is read.
+#   - workflow_run : after "Build and Push (Dubai)" published a main image,
+#                    deploy that exact commit. The trigger is filtered to
+#                    branches: [main] (this env tracks main only), so the
+#                    immutable sha-<short> tag is derived straight from the built
+#                    commit (workflow_run.head_sha) and the digest resolved from
+#                    GHCR (the source of truth) — no artifact is read.
 #   - workflow_dispatch : deploy a chosen tag. Leave `image_tag` empty to deploy
 #                    the branch's image (main / a feature branch), or set it to
 #                    an exact immutable tag (sha-<commit>, or an X.Y.Z release) —
-#                    handy for a rollback. A dispatch rolls EVERY target env in
-#                    ENVIRONMENTS to that tag (they share the generic image); to
-#                    move just one env, dispatch gitops-apps axion.yaml directly.
+#                    handy for a rollback.
 #
 # What gets pinned: always an IMMUTABLE reference. On workflow_run it's the
 # sha-<short> of the built commit (workflow_run.head_sha); an explicit dispatch
@@ -49,40 +44,37 @@
 # sha-<short> tag at the same digest — a mutable `latest` in a K8s manifest is a
 # smell. The digest is always resolved from the registry and the run FAILS if no
 # such image exists, so we never dispatch a pin for a tag that isn't published.
-name: Deploy (staging + branch envs)
+name: Deploy (Dubai)
 
 on:
   workflow_run:
-    workflows: ["Build and Push"]
+    workflows: ["Build and Push (Dubai)"]
     types: [completed]
-    # Staging tracks main only — filter at the trigger so a feature-branch
-    # build.yml dispatch never starts a staging deploy (fail-safe; no in-job
+    # The dubai env tracks main only — filter at the trigger so a feature-branch
+    # build-dubai.yml dispatch never starts a dubai deploy (fail-safe; no in-job
     # branch/environment guard needed).
     branches: [main]
   workflow_dispatch:
     inputs:
       image_tag:
-        description: "Generic image tag to deploy — empty = this branch's image (pinned to its immutable sha- tag); or an exact immutable tag (sha-<commit> or X.Y.Z)"
+        description: "Dubai image tag to deploy — empty = this branch's image (pinned to its immutable sha- tag); or an exact immutable tag (sha-<commit> or X.Y.Z)"
         required: false
         default: ""
 
 # Serialize deploys so a manual dispatch and an auto (workflow_run) deploy don't
 # fire conflicting pins; never cancel one mid-dispatch.
 concurrency:
-  group: deploy-staging
+  group: deploy-dubai
   cancel-in-progress: false
 
 env:
   REGISTRY: ghcr.io
-  # The generic (non -thailand, non -dubai) agent-sandbox image feeds the
-  # consumer-Axion tenants on freysa-staging-use1 that run it. Space-separated
-  # list of the gitops-apps `environment` instances to pin on each build — one
-  # axion.yaml dispatch per entry. Add a tenant here when it starts consuming the
-  # generic image; each must have a matching `- environment: <name>` on the axion
-  # ResourceSet in the central gitops repo (else there is no Flux Kustomization to
-  # reconcile). Envs on an OVERLAY image (dubai → -dubai, thailand → -thailand)
-  # do NOT belong here — they have their own deploy-<env>.yml.
-  ENVIRONMENTS: "staging"
+  # Single-env fan-out: the -dubai overlay image feeds only the `dubai` branch
+  # env. Kept as a list for parity with deploy-staging.yml — one axion.yaml
+  # dispatch per entry. The env must have a matching `- environment: dubai` on
+  # the axion ResourceSet in the central gitops repo (else there is no Flux
+  # Kustomization to reconcile).
+  ENVIRONMENTS: "dubai"
 
 jobs:
   deploy:
@@ -116,9 +108,11 @@ jobs:
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          # GHCR path is lowercase; the generic image is the repo image as-is
-          # (deploy-thailand.yml appends -thailand; staging does not).
-          image="${REGISTRY}/$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          # GHCR path is lowercase; the Dubai image is the repo image + -dubai
+          # (deploy-staging.yml uses the repo as-is; deploy-thailand.yml appends
+          # -thailand). This is also the `repository:` value the dubai
+          # values.yaml carries, so component=sandbox-dubai anchors on it.
+          image="${REGISTRY}/$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')-dubai"
           slugify() { echo "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's#[^a-z0-9._-]+#-#g; s#^[._-]+##; s#[._-]+$##' | cut -c1-128; }
           digest_of() { oras manifest fetch --descriptor "$1" 2>/dev/null | jq -r '.digest // empty' 2>/dev/null || true; }
 
@@ -130,8 +124,8 @@ jobs:
             workflow_run)
               # The trigger is filtered to branches: [main], so this is always a
               # main commit. Derive the immutable tag straight from the built
-              # commit — build.yml tags sha-<short> off the same SHA — rather
-              # than trusting build.yml's deploy-info artifact.
+              # commit — build-dubai.yml tags sha-<short> off the same SHA —
+              # rather than trusting any deploy-info artifact.
               tag="sha-${HEAD_SHA::7}"
               ;;
             workflow_dispatch)
@@ -189,14 +183,14 @@ jobs:
             tag="${pin_tag}"
           fi
 
-          echo "Will dispatch sandbox pin ${image}:${tag} -> ${digest}"
+          echo "Will dispatch sandbox-dubai pin ${image}:${tag} -> ${digest}"
           {
             echo "tag=${tag}"
             echo "digest=${digest}"
           } >> "$GITHUB_OUTPUT"
 
-      # Dispatch the gitops-apps deploy pipeline for the sandbox component, once
-      # per target environment. Each axion.yaml run's `update` job pins the
+      # Dispatch the gitops-apps deploy pipeline for the sandbox-dubai component,
+      # once per target environment. axion.yaml's `update` job pins the
       # tag/digest in THAT env's values.yaml, commits, packages the tenant OCI
       # artifact, and reconciles Flux. Same call the axionhypothesis image
       # workflows make for server/worker/etc. Context values go through env
@@ -206,11 +200,8 @@ jobs:
       # not return the triggered run's id, and this step does NOT watch it. So a
       # green step means every environment's dispatch was ACCEPTED, not that
       # axion.yaml (pin → OCI push → Flux reconcile) actually succeeded. Watch
-      # the real deploy outcome in gitops-apps' axion.yaml runs. (The
-      # axionhypothesis backend images use the gitops-dispatch composite action,
-      # which additionally correlates + blocks on the downstream run; this
-      # single-component sandbox path deliberately stays fire-and-forget.)
-      - name: Dispatch gitops-apps deploy (sandbox)
+      # the real deploy outcome in gitops-apps' axion.yaml runs.
+      - name: Dispatch gitops-apps deploy (sandbox-dubai)
         env:
           GH_TOKEN: ${{ secrets.GITOPS_APPS_PAT }}
           REPO_OWNER: ${{ github.repository_owner }}
@@ -223,18 +214,17 @@ jobs:
           set -euo pipefail
           # One dispatch per env in ENVIRONMENTS. Don't abort the loop on a single
           # env's dispatch failure (`if !` shields it from `set -e`) — attempt
-          # them all, then fail the job if any failed, so a transient hiccup
-          # deploying one env can't silently skip the rest. axion.yaml serializes
-          # + reconciles each env independently (per-env values.yaml + an
+          # them all, then fail the job if any failed. axion.yaml serializes +
+          # reconciles each env independently (per-env values.yaml + an
           # `axion-artifact-<env>` concurrency group), so the dispatches don't
           # collide even when they land together.
           rc=0
           for environment in ${ENVIRONMENTS}; do
-            echo "Dispatching axion.yaml environment=${environment} component=sandbox (${TAG}@${DIGEST})…"
+            echo "Dispatching axion.yaml environment=${environment} component=sandbox-dubai (${TAG}@${DIGEST})…"
             if ! gh workflow run axion.yaml \
               --repo "${REPO_OWNER}/gitops-apps" --ref main \
               --field environment="${environment}" \
-              --field component=sandbox \
+              --field component=sandbox-dubai \
               --field actor="${ACTOR}" \
               --field actor_id="${ACTOR_ID}" \
               --field ref_type=branch \
