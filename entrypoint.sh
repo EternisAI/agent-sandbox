@@ -26,8 +26,11 @@ CONFIG=/home/sandbox/.config/opencode/opencode.json
 # deployment via AXION_AGENT_MODEL_CONTEXT / AXION_AGENT_MODEL_OUTPUT, no rebuild.
 ctx="${AXION_AGENT_MODEL_CONTEXT:-204800}"
 out="${AXION_AGENT_MODEL_OUTPUT:-32000}"
-case "$ctx" in '' | *[!0-9]*) ctx=204800 ;; esac
-case "$out" in '' | *[!0-9]*) out=32000 ;; esac
+# Reject non-numeric overrides (fall back to the default), then force base-10 so
+# a zero-padded value like 007 becomes a valid JSON number literal for --argjson
+# (leading zeros are not legal JSON and some jq builds reject them).
+case "$ctx" in '' | *[!0-9]*) ctx=204800 ;; *) ctx=$((10#$ctx)) ;; esac
+case "$out" in '' | *[!0-9]*) out=32000 ;; *) out=$((10#$out)) ;; esac
 
 cat > "$CONFIG" <<EOF
 {
