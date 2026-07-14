@@ -7,21 +7,29 @@ set -e
 mkdir -p /data/opencode /data/workspaces
 export OPENCODE_DB=/data/opencode/opencode.db
 
-# When a self-hosted backend pins agents to a single model serving name (e.g. a
-# vLLM model), operators set LLM_AGENT_MODEL on the backend and it is injected
-# into this container as AXION_AGENT_MODEL. OpenCode resolves a model only if it
-# is in this provider map or the models.dev catalog, so an arbitrary serving
-# name must be declared here or every agent fails with "Model not found:
-# openrouter/<name>" before any inference. Declared with empty options so it is
-# sent as a plain request. Unset (the Eternis-hosted default) leaves only the
-# models baked in below. jq encodes the name as a JSON string key so a value
-# containing quotes or backslashes can't corrupt opencode.json.
-EXTRA_MODEL_ENTRY=""
-if [ -n "$AXION_AGENT_MODEL" ]; then
-  EXTRA_MODEL_ENTRY="$(jq -n --arg m "$AXION_AGENT_MODEL" '$m'): {},"
-fi
+CONFIG=/home/sandbox/.config/opencode/opencode.json
 
-cat > /home/sandbox/.config/opencode/opencode.json <<EOF
+# Context management (tool-output prune + an auto-compaction backstop) is OFF by
+# default and enabled by AXION_AGENT_PRUNE=true, which the backend sets from
+# axion.isPrivateDeployment. Hardware-constrained self-hosted deployments need it
+# because the agent loop otherwise grows context unbounded — prune is off and the
+# self-hosted model has no models.dev window to trigger auto-compaction. Elastic
+# upstreams (OpenRouter/Anthropic) don't need it. Prune erases only old completed
+# tool-call *outputs* (never reasoning, text, or tool arguments); auto-compaction
+# is the lossy summarising backstop, sized so prune keeps it from firing. See
+# docs/architecture/capacity-and-admission-control.md in the axionhypothesis repo.
+#
+# The window given to the pinned model MUST match the serving engine's
+# max_model_len (read from vLLM /v1/models); declaring more than the engine
+# serves gets requests rejected at the wire once context grows past it. Defaults
+# suit the MiniMax-M2.7 deployment (max_model_len 204800); override per
+# deployment via AXION_AGENT_MODEL_CONTEXT / AXION_AGENT_MODEL_OUTPUT, no rebuild.
+ctx="${AXION_AGENT_MODEL_CONTEXT:-204800}"
+out="${AXION_AGENT_MODEL_OUTPUT:-32000}"
+case "$ctx" in '' | *[!0-9]*) ctx=204800 ;; esac
+case "$out" in '' | *[!0-9]*) out=32000 ;; esac
+
+cat > "$CONFIG" <<EOF
 {
   "permission": "allow",
   "default_agent": "axion",
@@ -32,11 +40,11 @@ cat > /home/sandbox/.config/opencode/opencode.json <<EOF
       "options": {
         "baseURL": "$PROXY_BASE_URL",
         "apiKey": "$PROXY_API_KEY",
+        "compatibility": "strict",
         "timeout": 600000,
         "chunkTimeout": 300000
       },
       "models": {
-        $EXTRA_MODEL_ENTRY
         "minimax/minimax-m2.5:nitro": {
           "options": {
             "provider": {
@@ -128,6 +136,36 @@ cat > /home/sandbox/.config/opencode/opencode.json <<EOF
   }
 }
 EOF
+
+# Two post-processing steps, done with jq so they are robust whether the pinned
+# model is one of the baked entries above or an arbitrary self-hosted serving
+# name (the two must not depend on JSON key ordering or a hand-maintained list):
+#
+#   1. Declare AXION_AGENT_MODEL if it isn't already baked in, so OpenCode's
+#      catalog check passes — an unknown name fails with "Model not found:
+#      openrouter/<name>" before any inference. `//= {}` leaves a baked entry
+#      (and its reasoning/provider options) untouched and never emits a duplicate
+#      key. AXION_AGENT_MODEL is ALWAYS set: the backend defaults thread.agentModel
+#      to anthropic/claude-opus-4.6 (baked), so this is a no-op on Eternis-hosted
+#      deployments and injects a bare entry only for self-hosted serving names.
+#
+#   2. When context management is enabled, attach the compaction block and give
+#      the pinned model a real window. Setting .limit by path lands it on the
+#      right entry whether the model was baked or injected, so it can't be
+#      silently dropped by a serving name that collides with a baked slug.
+prune=false
+[ "$AXION_AGENT_PRUNE" = "true" ] && prune=true
+jq \
+  --arg m "$AXION_AGENT_MODEL" \
+  --argjson prune "$prune" \
+  --argjson ctx "$ctx" \
+  --argjson out "$out" '
+  (if $m != "" then .provider.openrouter.models[$m] //= {} else . end)
+  | if $prune then
+      .compaction = { auto: true, prune: true }
+      | (if $m != "" then .provider.openrouter.models[$m].limit = { context: $ctx, output: $out } else . end)
+    else . end
+' "$CONFIG" > "$CONFIG.tmp" && mv "$CONFIG.tmp" "$CONFIG"
 
 # The backend may supply the agent baseline (axion.md body) per container so it
 # can be edited per preset without rebuilding this image. When unset, the
