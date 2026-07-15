@@ -40,7 +40,7 @@ community cannot be mapped — omit it rather than forcing a wrong match.
 
 `emit_artifact` with `component: "Map"` and props:
 
-```json
+```jsonc
 {
   "title": "Median price per sqft by community",
   "subtitle": "One-line framing of what the map answers",
@@ -73,7 +73,7 @@ Colour: use **`diverging`** for signed change/delta data centred at zero
 
 You'll get an error listing each bad name with the closest valid matches, e.g.:
 
-```
+```text
 "Business Bey" is not a Dubai community — did you mean: Business Bay?
 "DIFC" is not a Dubai community and has no close match; remove this region or replace it with a real community
 ```
