@@ -20,11 +20,18 @@ CONFIG=/home/sandbox/.config/opencode/opencode.json
 # is the lossy summarising backstop, sized so prune keeps it from firing. See
 # docs/architecture/capacity-and-admission-control.md in the axionhypothesis repo.
 #
-# The window given to the pinned model MUST match the serving engine's
-# max_model_len (read from vLLM /v1/models); declaring more than the engine
-# serves gets requests rejected at the wire once context grows past it. Defaults
-# suit the MiniMax-M2.7 deployment (max_model_len 204800); override per
-# deployment via AXION_AGENT_MODEL_CONTEXT / AXION_AGENT_MODEL_OUTPUT, no rebuild.
+# `context` MUST match the serving engine's max_model_len (read from vLLM
+# /v1/models); declaring more than the engine serves gets requests rejected at
+# the wire once context grows past it — 204800 is the Siam MiniMax-M2.7 window.
+#
+# `output` is the per-turn generation reserve. 32000 mirrors OpenCode's own
+# OUTPUT_TOKEN_MAX constant — the value the runtime already falls back to when a
+# model has no output limit — so it both caps a turn's output (via the request's
+# maxOutputTokens) and is held back from the window: auto-compaction fires at
+# context - output (204800 - 32000 = 172800 here). Because it equals the runtime
+# default it is redundant unless lowered, but is kept explicit so the window /
+# reserve / threshold are all readable in one place. Override per deployment via
+# AXION_AGENT_MODEL_CONTEXT / AXION_AGENT_MODEL_OUTPUT without an image rebuild.
 ctx="${AXION_AGENT_MODEL_CONTEXT:-204800}"
 out="${AXION_AGENT_MODEL_OUTPUT:-32000}"
 # Reject non-numeric overrides (fall back to the default), then force base-10 so
