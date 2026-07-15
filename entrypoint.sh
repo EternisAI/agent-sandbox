@@ -40,6 +40,18 @@ out="${AXION_AGENT_MODEL_OUTPUT:-32000}"
 case "$ctx" in '' | *[!0-9]*) ctx=204800 ;; *) ctx=$((10#$ctx)) ;; esac
 case "$out" in '' | *[!0-9]*) out=32000 ;; *) out=$((10#$out)) ;; esac
 
+# OpenRouter streaming timeouts (milliseconds). chunk_timeout is the max gap
+# between streamed chunks; the self-hosted reasoning model (MiniMax M2.7) can go
+# quiet for minutes mid-turn while reasoning, tripping the old 5m gap timeout and
+# forcing needless agent respawns. Bumped to 8m. req_timeout is the whole-request
+# ceiling. Override per deployment via AXION_AGENT_STREAM_CHUNK_TIMEOUT_MS /
+# AXION_AGENT_STREAM_TIMEOUT_MS without an image rebuild. Same numeric guard as
+# ctx/out above (reject non-numeric, force base-10 for a valid JSON literal).
+chunk_timeout="${AXION_AGENT_STREAM_CHUNK_TIMEOUT_MS:-480000}"
+req_timeout="${AXION_AGENT_STREAM_TIMEOUT_MS:-600000}"
+case "$chunk_timeout" in '' | *[!0-9]*) chunk_timeout=480000 ;; *) chunk_timeout=$((10#$chunk_timeout)) ;; esac
+case "$req_timeout" in '' | *[!0-9]*) req_timeout=600000 ;; *) req_timeout=$((10#$req_timeout)) ;; esac
+
 cat > "$CONFIG" <<EOF
 {
   "permission": "allow",
@@ -52,8 +64,8 @@ cat > "$CONFIG" <<EOF
         "baseURL": "$PROXY_BASE_URL",
         "apiKey": "$PROXY_API_KEY",
         "compatibility": "strict",
-        "timeout": 600000,
-        "chunkTimeout": 300000
+        "timeout": $req_timeout,
+        "chunkTimeout": $chunk_timeout
       },
       "models": {
         "minimax/minimax-m2.5:nitro": {
