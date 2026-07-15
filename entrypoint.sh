@@ -10,8 +10,9 @@ export OPENCODE_DB=/data/opencode/opencode.db
 CONFIG=/home/sandbox/.config/opencode/opencode.json
 
 # Context management (tool-output prune + an auto-compaction backstop) is OFF by
-# default and enabled by AXION_AGENT_PRUNE=true, which the backend sets from
-# axion.isPrivateDeployment. Hardware-constrained self-hosted deployments need it
+# default and enabled by AXION_AGENT_PRUNE=true, which the backend sets when
+# agent inference runs on capacity-constrained self-hosted hardware (i.e. a
+# custom, non-OpenRouter agent endpoint). Such deployments need it
 # because the agent loop otherwise grows context unbounded — prune is off and the
 # self-hosted model has no models.dev window to trigger auto-compaction. Elastic
 # upstreams (OpenRouter/Anthropic) don't need it. Prune erases only old completed
