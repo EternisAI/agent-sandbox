@@ -8,7 +8,7 @@ allowed-tools: Bash(python3 -c *), Bash(python3 - *), Bash(python3 *)
 
 The `Map` artifact shades Dubai community polygons by a numeric value. You emit it
 with the **`emit_artifact`** tool (`component: "Map"`). The map joins each region
-onto a polygon by **exact community name**, against a **fixed, closed set of ~430
+onto a polygon by **exact community name**, against a **fixed, closed set of ~410
 Dubai communities**. The set carries a small **alias table** for a handful of
 universal abbreviations (`JBR`, `JLT`, `DIFC`, `JVC`, …) that resolve to their
 canonical community, but there is no general fuzzy matching and most marketing
@@ -22,7 +22,7 @@ name. Look it up first.**
 ## Step 1 — discover the valid names
 
 Before emitting, call the **`list_map_communities`** tool to get the exact names.
-Filter with a substring so you don't pull all 430:
+Filter with a substring so you don't pull all 410:
 
 - `list_map_communities` with `contains: "jumeirah"` → every community whose name
   contains "jumeirah" (e.g. `Jumeirah 3`, `Jumeirah Lakes Towers`,
