@@ -124,7 +124,7 @@ diverging choropleth.
 
 - Dubai only. No other deployment has community boundaries, so `Map` isn't offered
   elsewhere.
-- The valid set is names like `Business Bay`, `Trade Centre`, `Za'abeel`,
+- The valid set is names like `Business Bay`, `Trade Centre`, `Zabeel`,
   `Al Quoz Industrial Area 1`, `Al Barsha South 3` — cadastral/community names,
   not marketing districts. When in doubt, search `list_map_communities`; it is the
   single source of truth for what the map can paint.
