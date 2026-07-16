@@ -8,10 +8,13 @@ allowed-tools: Bash(python3 -c *), Bash(python3 - *), Bash(python3 *)
 
 The `Map` artifact shades Dubai community polygons by a numeric value. You emit it
 with the **`emit_artifact`** tool (`component: "Map"`). The map joins each region
-onto a polygon by **exact community name**, against a **fixed, closed set of ~349
-Dubai communities** — there is no fuzzy matching, no alias table, and no marketing
-names. A name outside the set is **rejected** by `emit_artifact` (you get the
-closest matches back and must fix or drop it), and it never renders.
+onto a polygon by **exact community name**, against a **fixed, closed set of ~430
+Dubai communities**. The set carries a small **alias table** for a handful of
+universal abbreviations (`JBR`, `JLT`, `DIFC`, `JVC`, …) that resolve to their
+canonical community, but there is no general fuzzy matching and most marketing
+names are not aliased. A name outside the set (and its aliases) is **rejected** by
+`emit_artifact` (you get the closest matches back and must fix or drop it), and it
+never renders.
 
 So the one rule that matters: **never invent, abbreviate, or guess a community
 name. Look it up first.**
@@ -19,7 +22,7 @@ name. Look it up first.**
 ## Step 1 — discover the valid names
 
 Before emitting, call the **`list_map_communities`** tool to get the exact names.
-Filter with a substring so you don't pull all 349:
+Filter with a substring so you don't pull all 430:
 
 - `list_map_communities` with `contains: "jumeirah"` → every community whose name
   contains "jumeirah" (e.g. `Jumeirah 3`, `Jumeirah Lakes Towers`,
@@ -30,11 +33,13 @@ Filter with a substring so you don't pull all 349:
 - `list_map_communities` with no `contains` → the full list.
 
 Use the returned strings **verbatim** as each region's `name`. If you have a
-popular/marketing name (e.g. "DIFC", "JBR", "Downtown", "JLT", "Dubai Hills
-Estate"), search for its likely real name and use what the tool
-returns — do not pass the marketing name. Some marketing areas have **no polygon
-at all** (e.g. DIFC): if `list_map_communities` returns nothing close, that
-community cannot be mapped — omit it rather than forcing a wrong match.
+popular/marketing name, look it up first. A few common abbreviations are aliased,
+and `list_map_communities` surfaces the canonical community for them (e.g. `JBR` →
+`Jumeirah Beach Residence`, `JLT` → `Jumeirah Lakes Towers`, `DIFC` → `Dubai
+International Financial Centre`, `JVC` → `Jumeirah Village Circle`). Others
+(e.g. "Dubai Hills Estate", "Dubai Sports City", "Dubai Islands") have **no polygon
+at all**: if `list_map_communities` returns nothing close, that area cannot be
+mapped — omit it rather than forcing a wrong match.
 
 ## Step 2 — emit the Map
 
@@ -75,7 +80,7 @@ You'll get an error listing each bad name with the closest valid matches, e.g.:
 
 ```text
 "Business Bey" is not a Dubai community — did you mean: Business Bay?
-"DIFC" is not a Dubai community and has no close match; remove this region or replace it with a real community
+"Dubai Hills Estate" is not a Dubai community and has no close match; remove this region or replace it with a real community
 ```
 
 Fix each name to an exact community (or drop that region), then re-emit. Don't
