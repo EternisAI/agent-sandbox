@@ -35,6 +35,7 @@ import io
 import json
 import os
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -207,6 +208,75 @@ def get_dataset(dataset_id):
     if code != 200 or not isinstance(d, dict) or "id" not in d:
         raise DataDubaiError(f"dataset {dataset_id} not found ({code})")
     return d
+
+
+# ---------------------------------------------------------------- citation
+
+PORTAL = "Dubai Data & Statistics Establishment (DDSE) open-data portal, data.dubai"
+
+_ENTITY_NAME_BY_ERC = {}
+
+
+def _clean(s):
+    """Strip the invisible mojibake some portal titles carry — trailing
+    zero-width joiners and stray combining marks (seen e.g. on the DDSE entity
+    name) that would render as tofu in a citation. Drops format/control chars
+    anywhere and combining marks left dangling at the end, while keeping
+    legitimate interior diacritics (Arabic entity names)."""
+    s = "".join(c for c in s if unicodedata.category(c)[0] != "C").strip()
+    while s and unicodedata.category(s[-1])[0] == "M":
+        s = s[:-1]
+    return s.strip()
+
+
+def _entity_name(erc):
+    """Resolve an issuing-entity ERC to its display name, caching the 76-row
+    entity list after the first lookup. A dataset record carries only the
+    issuing-entity ERC (r_issuingEntityOfDataset_c_issuingEntityERC), never the
+    name, so a citation that names the publisher has to join through
+    list_entities()."""
+    if not erc:
+        return ""
+    if not _ENTITY_NAME_BY_ERC:
+        for e in list_entities():
+            if e.get("erc"):
+                _ENTITY_NAME_BY_ERC[e["erc"]] = e.get("name") or ""
+    return _ENTITY_NAME_BY_ERC.get(erc, "")
+
+
+def citation(dataset, entity_name=None):
+    """Build the source line to attribute a figure to. Pass a dataset record
+    (from get_dataset() or a search item) or a bare dataset id.
+
+    Cite THIS — the named dataset and its issuing entity on the DDSE portal —
+    never the raw /o/c/… or /o/dda/… backend path, the presigned cdn.data.dubai
+    download link, or a bare host. Those are internal machine endpoints reached
+    only through the Axion proxy; they are not human-resolvable sources and must
+    never appear in a citation shown to a user. The portal itself is
+    UAE-geofenced, so the citation identifies the dataset by name + id rather
+    than a clickable link. The issuing entity is resolved from the dataset's ERC
+    via list_entities(); pass entity_name to skip that lookup.
+
+    e.g. "Dubai Airport Freezone Utilities Reports — Dubai Airport Freezone —
+    Dubai Data & Statistics Establishment (DDSE) open-data portal, data.dubai —
+    dataset 470307"."""
+    if not isinstance(dataset, dict):
+        dataset = get_dataset(dataset)
+    title = _clean((dataset.get("title_i18n") or {}).get("en_US")
+                   or dataset.get("title") or dataset.get("datasetName") or "dataset")
+    if entity_name is None:
+        entity_name = _entity_name(
+            dataset.get("r_issuingEntityOfDataset_c_issuingEntityERC")
+            or dataset.get("issuingEntityOfDatasetERC"))
+    entity_name = _clean(entity_name or "")
+    did = dataset.get("id") or dataset.get("datasetName") or ""
+    parts = [title or "dataset"]
+    if entity_name:
+        parts.append(entity_name)
+    parts.append(PORTAL)
+    if did:
+        parts.append(f"dataset {did}")
+    return " — ".join(parts)
 
 
 def list_themes():
@@ -404,6 +474,7 @@ big = fetch_dataset(461780, fmt="json", max_rows=5000)  # cap huge datasets
 
 ## Notes
 
+- **Citing sources.** When a figure from this skill lands in an artifact or the final answer, attribute it to the named dataset on the DDSE portal — use `citation(dataset)` to format the line, or write "Source: <Dataset Title> — <Issuing Entity> — DDSE open-data portal, data.dubai". Never cite the raw `/o/c/…` or `/o/dda/…` backend path, the presigned `cdn.data.dubai` download link, or a bare `data.dubai` host stub: those are internal machine endpoints reached only through the Axion proxy, not human-resolvable sources. The portal is UAE-geofenced, so identify the dataset by name and id rather than a clickable link.
 - **No Dubai credentials.** The open path needs no `data.dubai` key or login, so do not add one. The only `Authorization: Bearer` header is the backend `PROXY_API_KEY` (attached automatically by the helper) — that authenticates the sandbox to the Axion backend, not to Dubai. Only `isOpen:false` datasets require Dubai's paid API-key channel, which is out of scope here.
 - **Themes and entities.** 11 themes (Society, Infrastructure, Economic Sectors, Trade, Prices, Population, National Accounts, Employment, Digital Society, Quality of Life, Polls), 44 subthemes, 76 issuing entities. Some entities publish nothing yet, so join on `erc` and expect gaps.
 - **Preview vs download.** `preview_rows()` is capped near 7000 and a few realtime datasets 404 it. The download path is uncapped and more reliable, so prefer `fetch_dataset()` when you need every row. Download files are `.gz` and their links expire in about 600s; this skill fetches them immediately.
