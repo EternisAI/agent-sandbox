@@ -209,15 +209,35 @@ fi
 # HTTP endpoint, so this necessarily completes first), primes the page cache so
 # those per-worktree reads are warm hits; it also validates each skill's
 # frontmatter so a genuinely broken SKILL.md is loud in the logs instead of
-# silently absent, and writes a readiness marker recording the loaded count.
+# silently absent. Validation mirrors the repo's SKILL.md manifest contract
+# (plugins/skill-manifests.test.js): frontmatter must parse and declare name,
+# description, and allowed-tools, and name must equal the skill's directory, so
+# the loaded count can't be inflated by a manifest CI would reject. That count is
+# written to a readiness marker that is invalidated up front and replaced
+# atomically only after a clean scan, so an aborted run never leaves a stale
+# count advertising readiness.
 # Best-effort: a bad optional skill must not wedge the sandbox, so any failure is
 # logged and startup continues.
 SKILLS_READY_FILE="${SKILLS_READY_FILE:-/tmp/.skills-ready}"
 python3 - "$SKILLS_READY_FILE" /home/sandbox/.agents/skills /home/sandbox/.claude/skills <<'PY' || true
-import pathlib, sys
+import os, pathlib, re, sys
 
 marker = sys.argv[1]
 roots = sys.argv[2:]
+
+# Invalidate any stale marker up front so an aborted scan can't leave a previous
+# run's count in place (matters only when SKILLS_READY_FILE points at a
+# persistent path; /tmp is fresh per container).
+try:
+    pathlib.Path(marker).unlink(missing_ok=True)
+except Exception as e:
+    print(f"WARN skills-ready marker not cleared ({marker}): {e}", flush=True)
+
+# Required keys and frontmatter parsing mirror plugins/skill-manifests.test.js.
+REQUIRED = ("name", "description", "allowed-tools")
+FRONTMATTER = re.compile(r"^---\r?\n(.*?)\r?\n---", re.DOTALL)
+FIELD = re.compile(r"^([A-Za-z_-][A-Za-z0-9_-]*):\s*(.*)$")
+
 loaded, failed = [], []
 for root in roots:
     p = pathlib.Path(root)
@@ -229,23 +249,35 @@ for root in roots:
         except Exception as e:
             failed.append(f"{skill}: unreadable: {e}")
             continue
-        name = None
-        parts = text.split("---", 2)
-        if text.startswith("---") and len(parts) >= 3:
-            for line in parts[1].splitlines():
-                if line.strip().startswith("name:"):
-                    name = line.split(":", 1)[1].strip()
-                    break
-        if name:
-            loaded.append(name)
-        else:
-            failed.append(f"{skill}: missing name in frontmatter")
+        m = FRONTMATTER.match(text)
+        if not m:
+            failed.append(f"{skill}: missing --- frontmatter")
+            continue
+        fields = {}
+        for line in m.group(1).splitlines():
+            fm = FIELD.match(line)
+            if fm:
+                fields[fm.group(1)] = fm.group(2).strip()
+        missing = [k for k in REQUIRED if not fields.get(k)]
+        if missing:
+            failed.append(f"{skill}: missing frontmatter key(s): {', '.join(missing)}")
+            continue
+        if fields["name"] != skill.parent.name:
+            failed.append(f"{skill}: name=\"{fields['name']}\" != dir \"{skill.parent.name}\"")
+            continue
+        loaded.append(fields["name"])
 
 print(f"skill warm-up: {len(loaded)} loaded ({', '.join(sorted(loaded))}), {len(failed)} failed", flush=True)
 for f in failed:
     print(f"WARN skill-validation: {f}", flush=True)
+
+# Publish the count atomically (temp file in the same dir, then rename) so a
+# reader never sees a partial write and a failed run leaves no marker at all.
 try:
-    pathlib.Path(marker).write_text(f"{len(loaded)}\n")
+    tmp = f"{marker}.tmp"
+    with open(tmp, "w") as fh:
+        fh.write(f"{len(loaded)}\n")
+    os.replace(tmp, marker)
 except Exception as e:
     print(f"WARN skills-ready marker not written ({marker}): {e}", flush=True)
 PY
