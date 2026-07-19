@@ -198,6 +198,58 @@ if [ -n "$AXION_AGENT_BASELINE" ]; then
     > /home/sandbox/.config/opencode/agent/axion.md
 fi
 
+# Warm the skill index before serving. OpenCode rescans ~/.agents/skills per
+# agent worktree with unbounded file concurrency and silently drops any SKILL.md
+# that transiently fails to read, memoizing the partial result for that worktree
+# (opencode-ai through at least 1.18.3). Under the cold-read storm of concurrent
+# agent startup this intermittently hides skills — observed on Siam as an agent
+# getting "skill not found" for thai-government-data (and substack) while a
+# sibling agent loaded them fine. Reading every SKILL.md once here, before
+# `opencode serve` binds (the worker only dispatches after health-probing that
+# HTTP endpoint, so this necessarily completes first), primes the page cache so
+# those per-worktree reads are warm hits; it also validates each skill's
+# frontmatter so a genuinely broken SKILL.md is loud in the logs instead of
+# silently absent, and writes a readiness marker recording the loaded count.
+# Best-effort: a bad optional skill must not wedge the sandbox, so any failure is
+# logged and startup continues.
+SKILLS_READY_FILE="${SKILLS_READY_FILE:-/tmp/.skills-ready}"
+python3 - "$SKILLS_READY_FILE" /home/sandbox/.agents/skills /home/sandbox/.claude/skills <<'PY' || true
+import pathlib, sys
+
+marker = sys.argv[1]
+roots = sys.argv[2:]
+loaded, failed = [], []
+for root in roots:
+    p = pathlib.Path(root)
+    if not p.is_dir():
+        continue
+    for skill in sorted(p.glob("**/SKILL.md")):
+        try:
+            text = skill.read_text(encoding="utf-8")  # full read warms the page cache
+        except Exception as e:
+            failed.append(f"{skill}: unreadable: {e}")
+            continue
+        name = None
+        parts = text.split("---", 2)
+        if text.startswith("---") and len(parts) >= 3:
+            for line in parts[1].splitlines():
+                if line.strip().startswith("name:"):
+                    name = line.split(":", 1)[1].strip()
+                    break
+        if name:
+            loaded.append(name)
+        else:
+            failed.append(f"{skill}: missing name in frontmatter")
+
+print(f"skill warm-up: {len(loaded)} loaded ({', '.join(sorted(loaded))}), {len(failed)} failed", flush=True)
+for f in failed:
+    print(f"WARN skill-validation: {f}", flush=True)
+try:
+    pathlib.Path(marker).write_text(f"{len(loaded)}\n")
+except Exception as e:
+    print(f"WARN skills-ready marker not written ({marker}): {e}", flush=True)
+PY
+
 exec opencode serve \
   --hostname 0.0.0.0 \
   --port 4096
