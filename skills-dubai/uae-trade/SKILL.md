@@ -1,6 +1,7 @@
 ---
 name: uae-trade
-description: Fetch UAE international trade data. Default backend is FCSC's UAE.Stat SDMX API — monthly through Sept 2025, includes **re-exports by country** (the Dubai re-export economy view), monthly exports/imports by partner, and HS section breakdowns by trade type (annual; FCSC does not publish monthly HS-section data). UN Comtrade is the fallback for HS6 commodity drill-down and multi-country comparison (Comtrade is multilateral; FCSC is UAE-reporter-only). Both backends are reached through the backend proxy (`PROXY_BASE_URL` / `PROXY_API_KEY`): FCSC via Firecrawl (Cloudflare WAF on the SDMX host), Comtrade via the keyed proxy with graceful fallback to the unauthenticated public endpoint. Pre-scoped to UAE (reporterCode 784 / REF_AREA AE).
+description: >-
+  Fetch UAE international trade data. Default backend is FCSC's UAE.Stat SDMX API — monthly through Sept 2025, includes **re-exports by country** (the Dubai re-export economy view), monthly exports/imports by partner, and HS section breakdowns by trade type (annual; FCSC does not publish monthly HS-section data). UN Comtrade is the fallback for HS6 commodity drill-down and multi-country comparison (Comtrade is multilateral; FCSC is UAE-reporter-only). Both backends are reached through the backend proxy (`PROXY_BASE_URL` / `PROXY_API_KEY`): FCSC via Firecrawl (Cloudflare WAF on the SDMX host), Comtrade via the keyed proxy with graceful fallback to the unauthenticated public endpoint. Pre-scoped to UAE (reporterCode 784 / REF_AREA AE).
 allowed-tools: Bash(python3 -c *), Bash(python3 - *), Bash(python3 *)
 ---
 

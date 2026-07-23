@@ -198,89 +198,35 @@ if [ -n "$AXION_AGENT_BASELINE" ]; then
     > /home/sandbox/.config/opencode/agent/axion.md
 fi
 
-# Warm the skill index before serving. OpenCode rescans ~/.agents/skills per
-# agent worktree with unbounded file concurrency and silently drops any SKILL.md
-# that transiently fails to read, memoizing the partial result for that worktree
-# (opencode-ai through at least 1.18.3). Under the cold-read storm of concurrent
-# agent startup this intermittently hides skills — observed on Siam as an agent
-# getting "skill not found" for thai-government-data (and substack) while a
-# sibling agent loaded them fine. Reading every SKILL.md once here, before
-# `opencode serve` binds (the worker only dispatches after health-probing that
-# HTTP endpoint, so this necessarily completes first), primes the page cache so
-# those per-worktree reads are warm hits; it also validates each skill's
-# frontmatter so a genuinely broken SKILL.md is loud in the logs instead of
-# silently absent. Validation mirrors the repo's SKILL.md manifest contract
-# (plugins/skill-manifests.test.js): frontmatter must parse and declare name,
-# description, and allowed-tools, and name must equal the skill's directory, so
-# the loaded count can't be inflated by a manifest CI would reject. That count is
-# written to a readiness marker that is invalidated up front and replaced
-# atomically only after a clean scan, so an aborted run never leaves a stale
-# count advertising readiness.
-# Best-effort: a bad optional skill must not wedge the sandbox, so any failure is
-# logged and startup continues.
+# Validate the skill manifests before serving. OpenCode discovers a skill by
+# parsing its SKILL.md YAML frontmatter and drops any manifest that fails to
+# parse — silently, with no log line at all. Its retry path does not save such a
+# file either: gray-matter caches the failed parse keyed on the file contents,
+# so the sanitized-retry fallback runs only for the first parse in the process
+# and every later one (OpenCode rescans skills per agent *worktree*) returns
+# empty data without throwing. A manifest whose YAML is invalid therefore loads
+# for the first agent in a sandbox and vanishes for every agent after it. That
+# is how thai-government-data came to never once load on Siam while the
+# entrypoint's old line-regex validator reported it present.
+#
+# So this runs the repo's manifest contract (plugins/validate_skills.py — the
+# same checker CI runs with --strict) over the baked skills: real YAML parse,
+# required keys, name == directory, ${CLAUDE_SKILL_DIR} paths resolve. Any
+# violation is logged as WARN skill-validation instead of being silently absent.
+# Reading every SKILL.md also primes the page cache before `opencode serve`
+# binds (the worker only dispatches after health-probing that HTTP endpoint, so
+# this necessarily completes first). The loaded count is written to a readiness
+# marker that is invalidated up front and replaced atomically only after a clean
+# scan, so an aborted run never leaves a stale count advertising readiness.
+#
+# Best-effort on purpose: a bad optional skill must not wedge the sandbox, so a
+# violation is logged and startup continues. CI is where a broken manifest
+# blocks — see plugins/skill-manifests.test.js.
 SKILLS_READY_FILE="${SKILLS_READY_FILE:-/tmp/.skills-ready}"
-python3 - "$SKILLS_READY_FILE" /home/sandbox/.agents/skills /home/sandbox/.claude/skills <<'PY' || true
-import os, pathlib, re, sys
-
-marker = sys.argv[1]
-roots = sys.argv[2:]
-
-# Invalidate any stale marker up front so an aborted scan can't leave a previous
-# run's count in place (matters only when SKILLS_READY_FILE points at a
-# persistent path; /tmp is fresh per container).
-try:
-    pathlib.Path(marker).unlink(missing_ok=True)
-except Exception as e:
-    print(f"WARN skills-ready marker not cleared ({marker}): {e}", flush=True)
-
-# Required keys and frontmatter parsing mirror plugins/skill-manifests.test.js.
-REQUIRED = ("name", "description", "allowed-tools")
-FRONTMATTER = re.compile(r"^---\r?\n(.*?)\r?\n---", re.DOTALL)
-FIELD = re.compile(r"^([A-Za-z_-][A-Za-z0-9_-]*):\s*(.*)$")
-
-loaded, failed = [], []
-for root in roots:
-    p = pathlib.Path(root)
-    if not p.is_dir():
-        continue
-    for skill in sorted(p.glob("**/SKILL.md")):
-        try:
-            text = skill.read_text(encoding="utf-8")  # full read warms the page cache
-        except Exception as e:
-            failed.append(f"{skill}: unreadable: {e}")
-            continue
-        m = FRONTMATTER.match(text)
-        if not m:
-            failed.append(f"{skill}: missing --- frontmatter")
-            continue
-        fields = {}
-        for line in m.group(1).splitlines():
-            fm = FIELD.match(line)
-            if fm:
-                fields[fm.group(1)] = fm.group(2).strip()
-        missing = [k for k in REQUIRED if not fields.get(k)]
-        if missing:
-            failed.append(f"{skill}: missing frontmatter key(s): {', '.join(missing)}")
-            continue
-        if fields["name"] != skill.parent.name:
-            failed.append(f"{skill}: name=\"{fields['name']}\" != dir \"{skill.parent.name}\"")
-            continue
-        loaded.append(fields["name"])
-
-print(f"skill warm-up: {len(loaded)} loaded ({', '.join(sorted(loaded))}), {len(failed)} failed", flush=True)
-for f in failed:
-    print(f"WARN skill-validation: {f}", flush=True)
-
-# Publish the count atomically (temp file in the same dir, then rename) so a
-# reader never sees a partial write and a failed run leaves no marker at all.
-try:
-    tmp = f"{marker}.tmp"
-    with open(tmp, "w") as fh:
-        fh.write(f"{len(loaded)}\n")
-    os.replace(tmp, marker)
-except Exception as e:
-    print(f"WARN skills-ready marker not written ({marker}): {e}", flush=True)
-PY
+python3 /home/sandbox/.config/opencode/plugins/validate_skills.py \
+  --marker "$SKILLS_READY_FILE" \
+  /home/sandbox/.agents/skills \
+  /home/sandbox/.claude/skills || true
 
 exec opencode serve \
   --hostname 0.0.0.0 \
