@@ -1,6 +1,7 @@
 ---
 name: data-dubai
-description: Query the Dubai open-data portal (data.dubai, run by the Dubai Data & Statistics Establishment). 617 government datasets across 11 themes and 76 issuing entities (RTA, Dubai Municipality, Customs, DLD, Police, DEWA, DHA, KHDA). Search or browse the catalog, read a dataset's schema and config, pull a quick row preview, or download the FULL dataset (uncapped) as parsed rows. Reverse-engineered from the portal's own Liferay backend, so no API key, no login, no vendor credentials. Use when users ask about Dubai/UAE government statistics: trade, licensing, population, transport, prices, employment, courts, utilities, and more.
+description: >-
+  Query the Dubai open-data portal (data.dubai, run by the Dubai Data & Statistics Establishment). 617 government datasets across 11 themes and 76 issuing entities (RTA, Dubai Municipality, Customs, DLD, Police, DEWA, DHA, KHDA). Search or browse the catalog, read a dataset's schema and config, pull a quick row preview, or download the FULL dataset (uncapped) as parsed rows. Reverse-engineered from the portal's own Liferay backend, so no API key, no login, no vendor credentials. Use when users ask about Dubai/UAE government statistics: trade, licensing, population, transport, prices, employment, courts, utilities, and more.
 allowed-tools: Bash(python3 -c *), Bash(python3 - *), Bash(python3 *)
 ---
 

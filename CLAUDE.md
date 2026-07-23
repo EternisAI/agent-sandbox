@@ -137,6 +137,46 @@ Skills live in `skills/<name>/SKILL.md` and are copied into every image at
 `/home/sandbox/.agents/skills/`. The OpenCode runtime auto-discovers them; the
 `description` frontmatter drives selection.
 
+**The frontmatter must be valid YAML — this is stricter than Claude Code.**
+Claude Code tolerates frontmatter that a real YAML parser rejects, so a manifest
+copied from there can look fine and still be dropped here. The failure is
+invisible: OpenCode silently skips a skill whose frontmatter does not parse (no
+log line), and it does not consistently skip it — gray-matter caches the failed
+parse, so OpenCode's sanitized-retry fallback rescues only the *first* parse in
+a process. Since skills are rescanned per agent worktree, a broken manifest
+loads for the first agent in a sandbox and disappears for every agent after it.
+That is how `thai-government-data` never once loaded on Siam.
+
+The trap in practice is a **`": "` inside an unquoted value** — a colon-space
+starts a nested mapping, so one appearing mid-sentence makes the whole file
+invalid:
+
+```yaml
+# BROKEN: "(state enterprise): population/census" makes this invalid YAML
+description: Query Thai-government data (every ministry, department, province, state enterprise): population/census, public health, …
+
+# CORRECT: a folded block scalar needs no escaping, ever
+description: >-
+  Query Thai-government data (every ministry, department, province, state enterprise): population/census, public health, …
+```
+
+Prefer `>-` over quoting: descriptions are long, punctuation-heavy prose that
+already contains both apostrophes and `"quoted"` fragments, so single- and
+double-quoting each need escaping that the next edit will get wrong. `>-` folds
+to a single line and strips the trailing newline, so the parsed value is
+identical to the plain form.
+
+`plugins/validate_skills.py` is the contract — real YAML parse, required keys
+(`name`, `description`, `allowed-tools`), `name` == directory,
+`${CLAUDE_SKILL_DIR}` paths resolve. CI runs it with `--strict` via
+`plugins/skill-manifests.test.js` (a violation fails the build); the sandbox
+entrypoint runs it best-effort at container start, logging `WARN
+skill-validation:` without wedging the sandbox. Check a manifest locally with:
+
+```bash
+python3 plugins/validate_skills.py --strict skills skills-thailand skills-dubai
+```
+
 **Per-customer skills are kept out of the default image.** Customer-specific
 skills live in a sibling `skills-<customer>/` dir (NOT `skills/`) and are layered
 on only by that customer's overlay image — see the Thai-government image below.

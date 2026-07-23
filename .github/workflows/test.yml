@@ -36,10 +36,12 @@ jobs:
 
       # pdf-reader.test.js drives test-PDF creation through pymupdf, and the
       # plugin under test shells out to extract_pdf.py which imports pymupdf
-      # via pymupdf4llm. Pin to the same version baked into the Dockerfile
-      # so CI exercises the same Python runtime as the production sandbox.
+      # via pymupdf4llm. skill-manifests.test.js shells out to
+      # validate_skills.py, which imports yaml. Pin both to the same versions
+      # baked into the Dockerfile so CI exercises the same Python runtime as the
+      # production sandbox.
       - name: Install plugin Python deps
-        run: pip install --no-cache-dir pymupdf4llm==1.27.2.2
+        run: pip install --no-cache-dir pymupdf4llm==1.27.2.2 pyyaml==6.0.3
 
       - name: Run plugin tests
         run: node --test plugins/*.test.js

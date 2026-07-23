@@ -26,7 +26,10 @@ RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
 
 RUN corepack enable && corepack prepare pnpm@10.6.5 --activate
 
-RUN pip install --no-cache-dir uv==0.6.12 massive==2.4.0 fredapi==0.5.2 sec-api==1.0.35 pymupdf4llm==1.27.2.2 finnhub-python==2.4.20
+# pyyaml backs plugins/validate_skills.py, which the entrypoint runs before
+# `opencode serve` binds. Declared explicitly rather than relied on transitively,
+# so an upstream dependency change can't silently disable manifest validation.
+RUN pip install --no-cache-dir uv==0.6.12 massive==2.4.0 fredapi==0.5.2 sec-api==1.0.35 pymupdf4llm==1.27.2.2 finnhub-python==2.4.20 pyyaml==6.0.3
 
 RUN npm install -g opencode-ai@1.15.5 @openrouter/ai-sdk-provider@2.9.0
 
