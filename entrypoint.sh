@@ -52,10 +52,41 @@ req_timeout="${AXION_AGENT_STREAM_TIMEOUT_MS:-600000}"
 case "$chunk_timeout" in '' | *[!0-9]*) chunk_timeout=480000 ;; *) chunk_timeout=$((10#$chunk_timeout)) ;; esac
 case "$req_timeout" in '' | *[!0-9]*) req_timeout=600000 ;; *) req_timeout=$((10#$req_timeout)) ;; esac
 
+# MCP tool-call timeout (milliseconds). This global default is the ONLY timeout
+# knob that reaches the MCP servers the backend registers, and it registers all
+# of them dynamically over the McpAdd API. OpenCode resolves a tool call's
+# timeout as `cfg.mcp[server].timeout ?? cfg.experimental.mcp_timeout`
+# (packages/opencode/src/mcp/index.ts, MCP.tools()), and `cfg.mcp` is the
+# *on-disk* config only — a server added at runtime never appears there. So the
+# per-server timeout the backend sends with McpAdd is stored on the client and
+# used for connect/list, but never applied to a tool call: every dynamically
+# registered server silently falls back to the MCP SDK's 60s default. Observed
+# on Siam as exa_deep_research failing `-32001 Request timed out` at 60.03s on
+# calls whose own budget is 6m, making that tool structurally unable to finish.
+#
+# 420000 matches exaMCPTimeoutMs in the backend and exceeds exa's own
+# agentRunMaxWait (6m), so the handler's deadline fires first and this stays a
+# backstop rather than the primary bound. That layering holds because every MCP
+# the backend registers bounds its own work server-side: exa 6m (30s per HTTP
+# call), firecrawl 30s, news 30s, mediawiki 30s (whole agent loop), youtube 100s
+# per request. A third-party MCP that does *not* self-bound will now hold a tool
+# slot for up to 7m instead of 60s — that is the trade for deep_research working
+# at all, and the reason to keep this overridable per deployment via
+# AXION_AGENT_MCP_TIMEOUT_MS. Same numeric guard as ctx/out above.
+mcp_timeout="${AXION_AGENT_MCP_TIMEOUT_MS:-420000}"
+case "$mcp_timeout" in '' | *[!0-9]*) mcp_timeout=420000 ;; *) mcp_timeout=$((10#$mcp_timeout)) ;; esac
+# Unlike ctx/out, this key is schema-typed PositiveInt, so a literal 0 is not
+# merely useless but rejected at config load — which would wedge the sandbox on
+# boot rather than degrade it. Guard the one value the digit test lets through.
+[ "$mcp_timeout" -gt 0 ] || mcp_timeout=420000
+
 cat > "$CONFIG" <<EOF
 {
   "permission": "allow",
   "default_agent": "axion",
+  "experimental": {
+    "mcp_timeout": $mcp_timeout
+  },
   "provider": {
     "openrouter": {
       "npm": "@openrouter/ai-sdk-provider",
