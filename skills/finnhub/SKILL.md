@@ -386,7 +386,7 @@ print(f"Dividend yield: {m.get('dividendYieldIndicatedAnnual'):.2f}%")
 print(f"ROE (TTM): {m.get('roeTTM'):.2f}%")
 ```
 
-### Dubai listed company — fundamentals + earnings history
+### Dubai-listed company — fundamentals + earnings history
 
 Works the same way as a US name, but the ticker carries the exchange suffix and values come back in AED. The example below covers a Dubai-strategy lookup that an Axion agent would do when the question touches a DFM-listed name (DEWA, Emaar, Salik, Empower, Talabat, Parkin, Emirates NBD, du). Do NOT call `stock_social_sentiment`, `company_eps_estimates`, or `company_revenue_estimates` for these tickers — they return an access error at the current proxy tier. Use `earnings_calendar` with a forward date window to get the **next quarter's** `epsEstimate` / `revenueEstimate` — only one quarter ahead, not the multi-quarter strip the blocked endpoints would have returned.
 
