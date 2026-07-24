@@ -80,6 +80,12 @@ case "$mcp_timeout" in '' | *[!0-9]*) mcp_timeout=420000 ;; *) mcp_timeout=$((10
 # boot rather than degrade it. Guard the one value the digit test lets through.
 [ "$mcp_timeout" -gt 0 ] || mcp_timeout=420000
 
+# Models carrying per-model options are declared below; the rest resolve from
+# models.dev. "z-ai/glm-5.2-fast" is neither — it is the id the backend coined
+# for Baseten's low-variance GLM-5.2 tier, which has no OpenRouter listing to
+# resolve against, so it MUST stay declared here. Drop it and every agent on
+# that model dies at getModel with ProviderModelNotFoundError, surfacing as a
+# "completed" agent that echoed its prompt.
 cat > "$CONFIG" <<EOF
 {
   "permission": "allow",
@@ -184,6 +190,7 @@ cat > "$CONFIG" <<EOF
           }
         },
         "z-ai/glm-5.1": {},
+        "z-ai/glm-5.2-fast": {},
         "deepseek/deepseek-v4-pro": {}
       }
     }
