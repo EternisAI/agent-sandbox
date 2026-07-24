@@ -86,6 +86,14 @@ case "$mcp_timeout" in '' | *[!0-9]*) mcp_timeout=420000 ;; *) mcp_timeout=$((10
 # resolve against, so it MUST stay declared here. Drop it and every agent on
 # that model dies at getModel with ProviderModelNotFoundError, surfacing as a
 # "completed" agent that echoed its prompt.
+#
+# The three z-ai ids also carry explicit "cost" (USD per 1M tokens): the backend
+# proxy rewrites them onto Baseten's own GLM endpoints, but OpenCode still prices
+# every assistant message from the models.dev catalog, which lists OpenRouter's
+# rates — or, for glm-5.2-fast, nothing at all, which prices the run at zero.
+# That number is what lands in agent_sessions.cost_usd, so without these blocks
+# agent spend on Baseten is silently wrong. Rates from Baseten's own
+# /v1/models; re-check them when the served tiers change.
 cat > "$CONFIG" <<EOF
 {
   "permission": "allow",
@@ -189,8 +197,15 @@ cat > "$CONFIG" <<EOF
             }
           }
         },
-        "z-ai/glm-5.1": {},
-        "z-ai/glm-5.2-fast": {},
+        "z-ai/glm-5.1": {
+          "cost": { "input": 1.30, "output": 4.30, "cache_read": 0.26 }
+        },
+        "z-ai/glm-5.2": {
+          "cost": { "input": 1.40, "output": 4.40, "cache_read": 0.14 }
+        },
+        "z-ai/glm-5.2-fast": {
+          "cost": { "input": 2.10, "output": 6.60, "cache_read": 0.21 }
+        },
         "deepseek/deepseek-v4-pro": {}
       }
     }
