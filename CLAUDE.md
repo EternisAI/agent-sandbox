@@ -143,9 +143,32 @@ copied from there can look fine and still be dropped here. The failure is
 invisible: OpenCode silently skips a skill whose frontmatter does not parse (no
 log line), and it does not consistently skip it — gray-matter caches the failed
 parse, so OpenCode's sanitized-retry fallback rescues only the *first* parse in
-a process. Since skills are rescanned per agent worktree, a broken manifest
-loads for the first agent in a sandbox and disappears for every agent after it.
-That is how `thai-government-data` never once loaded on Siam.
+a process. Skills are rescanned per agent worktree, so the good parse is spent
+almost immediately and every scan after it drops the skill. That is how
+`thai-government-data` never once loaded on Siam, and how `data-dubai` and
+`uae-trade` were lost from the Dubai image for weeks with nobody noticing.
+
+> **A broken manifest will work on your machine. Do not treat a local run as
+> proof.** This is the same bug's other face, and it has already misled one
+> contributor. A local loop is a fresh OpenCode process running one or two
+> agents, which means you are always the *first* parse — the fallback rescues
+> you every time. Production spends that one parse before the first agent even
+> starts (warm sandboxes are reused across threads, so the cache often arrives
+> already poisoned) and then drops the skill for everything after. Two traps
+> that follow from this:
+>
+> - **The model and provider are irrelevant.** The YAML parse happens in Node
+>   before any LLM call, so nothing about which model you point at it can change
+>   whether the skill registers.
+> - **Seeing the skill's backend get hit is not evidence it registered.** Skills
+>   are `allowed-tools: Bash(python3 *)` payloads on disk, so an agent can
+>   `sys.path.insert` into `/home/sandbox/.agents/skills/<name>` and run the
+>   module directly, with the `skill` tool never involved. Traffic proves the
+>   script ran, not that OpenCode loaded the manifest.
+>
+> The only sound local check is `validate_skills.py --strict` (below). The only
+> sound runtime check is a `status=completed` `skill` call, or the skill's
+> presence in the list that a `Skill "X" not found` error prints.
 
 The trap in practice is a **`": "` inside an unquoted value** — a colon-space
 starts a nested mapping, so one appearing mid-sentence makes the whole file
