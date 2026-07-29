@@ -21,3 +21,6 @@ temp_scripts/
 .env.*
 .DS_Store
 **/.DS_Store
+
+# CI-only helper, run inside the built image via a bind mount.
+scripts/

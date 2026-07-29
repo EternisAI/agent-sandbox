@@ -58,14 +58,23 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
 
-      # Build-only check: catches Dockerfile syntax errors, broken apt/npm/pip
-      # pins, and missing files referenced by COPY before they land on main.
-      # Does not push or run the image.
+      # Catches Dockerfile syntax errors, broken apt/npm/pip pins, and missing
+      # files referenced by COPY before they land on main. Loaded into the local
+      # daemon (not pushed) so the catalog check below can run against it.
       - name: Build sandbox image
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
           push: false
-          load: false
+          load: true
+          tags: agent-sandbox:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # A model declared in entrypoint.sh but missing from the pinned
+      # opencode-ai catalog runs with zero cost, no context window and reasoning
+      # off, silently. See scripts/check-model-catalog.sh.
+      - name: Check declared models against the pinned catalog
+        run: |
+          docker run --rm -v "$PWD/scripts:/scripts:ro" \
+            --entrypoint bash agent-sandbox:ci /scripts/check-model-catalog.sh

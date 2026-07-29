@@ -80,8 +80,15 @@ case "$mcp_timeout" in '' | *[!0-9]*) mcp_timeout=420000 ;; *) mcp_timeout=$((10
 # boot rather than degrade it. Guard the one value the digit test lets through.
 [ "$mcp_timeout" -gt 0 ] || mcp_timeout=420000
 
-# Models carrying per-model options are declared below; the rest resolve from
-# models.dev. "z-ai/glm-5.2-fast" is neither — it is the id the backend coined
+# Every model the backend can ask an agent to run is declared below, whether or
+# not it needs per-model options — a bare {} entry inherits the catalog record
+# untouched and merely makes this list match coordinatorVariants.agents in the
+# backend's application.yaml, so scripts/check-model-catalog.sh can check the
+# whole offered set for catalog coverage rather than a subset of it. Adding a
+# model there means adding it here too; if it postdates the pinned opencode-ai
+# version, the Dockerfile pin has to move with it.
+#
+# "z-ai/glm-5.2-fast" is a special case — it is the id the backend coined
 # for Baseten's low-variance GLM-5.2 tier, which has no OpenRouter listing to
 # resolve against, so it MUST stay declared here. Drop it and every agent on
 # that model dies at getModel with ProviderModelNotFoundError, surfacing as a
@@ -113,19 +120,39 @@ cat > "$CONFIG" <<EOF
         "chunkTimeout": $chunk_timeout
       },
       "models": {
-        "minimax/minimax-m2.5:nitro": {
-          "options": {
-            "provider": {
-              "order": ["mara"],
-              "allow_fallbacks": true
-            }
-          }
-        },
         "minimax/minimax-m2.7": {
           "options": {
             "provider": {
               "order": ["mara", "sambanova", "fireworks"],
               "allow_fallbacks": true
+            }
+          }
+        },
+        "minimax/minimax-m3": {},
+        "anthropic/claude-fable-5": {
+          "options": {
+            "reasoning": { "effort": "high" },
+            "provider": {
+              "order": ["anthropic"],
+              "allow_fallbacks": false
+            }
+          }
+        },
+        "anthropic/claude-opus-5": {
+          "options": {
+            "reasoning": { "effort": "high" },
+            "provider": {
+              "order": ["anthropic"],
+              "allow_fallbacks": false
+            }
+          }
+        },
+        "anthropic/claude-opus-4.8": {
+          "options": {
+            "reasoning": { "effort": "high" },
+            "provider": {
+              "order": ["anthropic"],
+              "allow_fallbacks": false
             }
           }
         },
@@ -180,6 +207,14 @@ cat > "$CONFIG" <<EOF
             }
           }
         },
+        "openai/gpt-5.6-sol": {
+          "options": {
+            "provider": {
+              "order": ["openai"],
+              "allow_fallbacks": false
+            }
+          }
+        },
         "google/gemini-3.1-pro-preview": {
           "options": { "reasoning": { "effort": "high" } }
         },
@@ -197,6 +232,8 @@ cat > "$CONFIG" <<EOF
             }
           }
         },
+        "moonshotai/kimi-k3": {},
+        "nvidia/nemotron-3-ultra-550b-a55b": {},
         "z-ai/glm-5.1": {
           "cost": { "input": 1.30, "output": 4.30, "cache_read": 0.26 }
         },

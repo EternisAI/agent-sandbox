@@ -31,7 +31,19 @@ RUN corepack enable && corepack prepare pnpm@10.6.5 --activate
 # so an upstream dependency change can't silently disable manifest validation.
 RUN pip install --no-cache-dir uv==0.6.12 massive==2.4.0 fredapi==0.5.2 sec-api==1.0.35 pymupdf4llm==1.27.2.2 finnhub-python==2.4.20 pyyaml==6.0.3
 
-RUN npm install -g opencode-ai@1.15.5 @openrouter/ai-sdk-provider@2.9.0
+# The pinned opencode-ai version fixes which model ids carry real catalog data.
+# OpenCode ships an embedded models.dev snapshot and never refreshes it at
+# runtime, so a model released after this pin is unknown to it. Declaring such
+# an id in entrypoint.sh still makes it usable, which is what makes this easy to
+# miss — but it comes back with an empty record: cost 0/0/0/0, so every run on
+# it lands $0 in agent_sessions.cost_usd; limit.context 0 and limit.output 0;
+# and capabilities.reasoning false, so OpenCode treats it as a model that cannot
+# think. Measured on 1.15.5 with a bare "anthropic/claude-opus-5": all of the
+# above; on 1.18.9 the same id reports $5/$25, a 1M window, and reasoning true.
+# Bumping this pin is therefore part of adding a model, alongside the
+# entrypoint.sh declaration. 1.15.5 stopped at claude-opus-4.7; 1.18.9 covers
+# through claude-opus-5.
+RUN npm install -g opencode-ai@1.18.9 @openrouter/ai-sdk-provider@2.9.0
 
 
 RUN useradd -m -s /bin/bash sandbox \
