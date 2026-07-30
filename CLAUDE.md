@@ -237,6 +237,27 @@ credentials live in backend config (`thaidata.proxyUrl`), never in this image.
   `backend-go/application.yaml` in the `axionhypothesis` repo.
 - Pin all tool versions in the Dockerfile (opencode-ai, Node.js, pnpm, uv, etc.).
 
+## Adding a model
+
+Two files, both required:
+
+1. Declare the id under `provider.openrouter.models` in `entrypoint.sh`, with
+   whatever routing and reasoning options it needs.
+2. Make sure the `opencode-ai` pin in the `Dockerfile` is new enough to have the
+   model in its models.dev snapshot. OpenCode embeds that snapshot and never
+   refreshes it at runtime.
+
+Step 2 is the one that gets skipped, because skipping it does not break
+anything visibly. An id the snapshot doesn't know is still accepted and served —
+with cost 0, `limit.context` 0, `limit.output` 0 and `capabilities.reasoning`
+false. Agents on it run, bill $0 into `agent_sessions.cost_usd`, get no window,
+and are treated as unable to think. `scripts/check-model-catalog.sh` is the
+guard; CI runs it against the built image.
+
+The set to keep in sync is `coordinatorVariants.agents` in
+`backend-go/application.yaml` over in `axionhypothesis` — every id offered there
+has to be declared here.
+
 ## Build context
 
 `.dockerignore` is **shared** by `Dockerfile` and `Dockerfile.thailand` (same
