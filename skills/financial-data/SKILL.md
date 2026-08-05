@@ -94,9 +94,13 @@ resp.raise_for_status()
 results = resp.json().get("results", [])
 ```
 
-- Filter by `composite_ticker` for one fund; omit it to sweep the universe.
-- `processed_date` and `effective_date` both accept `.gt`, `.gte`, `.lt`, `.lte` suffixes. `effective_date` is the flow date; `processed_date` is when the vendor published it, which is what you want when checking for new data.
-- History goes back to 2017-04-03.
+Each row carries `composite_ticker`, `effective_date`, `fund_flow` (net dollars for the day, negative is an outflow), `nav`, `shares_outstanding`, and `processed_date`.
+
+- Filter by `composite_ticker` for one fund; omit it to sweep the universe. It also takes `.any_of` for a basket.
+- `processed_date` and `effective_date` both accept `.gt`, `.gte`, `.lt`, `.lte` suffixes. `effective_date` is the flow date; `processed_date` is when the vendor published it, which is what you want when checking for new data. Issuers publish on different delays, so a fund can be missing from a given `effective_date` and arrive later.
+- `limit` defaults to 100, so set it or you will silently rank the wrong ETFs on a universe sweep. 5000 is the maximum.
+- `sort` takes comma-separated columns with `.asc` or `.desc`.
+- History goes back to 2017-04-03, updated daily.
 - Paginate with `next_url` when the result set exceeds `limit`.
 
 ## Method Index with Field Names
