@@ -62,7 +62,7 @@ The SDK has no fund flow or positioning data, and searching `discover.py` for "f
 
 - **ETF fund flows** (daily creations and redemptions) — `api/etfs/{ticker}/in-outflow`
 - **Dark pool prints** — `api/darkpool/{ticker}`, `api/darkpool/recent`
-- **Intraday flow pressure** — `api/market/{ticker}/etf-tide`, `api/market/market-tide`
+- **Intraday pressure from options flow** — `api/market/{ticker}/etf-tide`, `api/market/market-tide`
 - **Short interest, failures to deliver, gamma exposure, institutional holdings**
 
 Do not fall back to web search for these. Weekly issuer and ETF.com roundups are the wrong granularity and usually days stale.

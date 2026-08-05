@@ -113,9 +113,11 @@ Use for filing content keyword queries across all forms.
 - `cusip` is target company, `cik` is filer.
 - Use `POST /form-13d-13g` for 13D filings; combine with Section Extractor for detailed text extraction.
 - **This is the endpoint for activist and large-stake questions** — who is accumulating a position in a company, how big, and since when. The response is already parsed, so the stake size is a number you can compare across filings without touching the filing text.
-- Per-filing fields: `nameOfIssuer`, `cusip`, `filedAt`, `eventDate` (the date the stake crossed the threshold, which is earlier than `filedAt`), `amendmentNo`, and `item1` through `item7` as text.
+- Per-filing fields: `nameOfIssuer`, `cusip`, `filedAt`, `eventDate`, `amendmentNo`, and `item1` through `item7` as text.
+- `eventDate` is the date of the event that required the filing, and is earlier than `filedAt`. On an original filing that is the threshold crossing; on an amendment it is the material change that triggered the amendment, which is usually a change in the stake, not a crossing.
 - Per-owner fields under `owners[*]`: `name`, `amountAsPercent` (percent of the class, e.g. `8.4`), `aggregateAmountOwned` (shares), `soleVotingPower`, `sharedVotingPower`, `soleDispositivePower`, `sharedDispositivePower`.
-- Query a date range on `filedAt` to assemble a stake history in one call — filter by `cusip` for one target, or by the filer's name to follow one activist across names. Do not page through filings one at a time.
+- Query a date range on `filedAt` to assemble a stake history — filter by `cusip` for one target, or by the filer's name to follow one activist across names. This beats fetching filings one accession at a time.
+- The response caps at 50 filings. When a range matches more, page with `from` offsets and a fixed `sort` so the ordering stays stable across pages: `{"query":"...","from":0,"size":50,"sort":[{"filedAt":{"order":"desc"}}]}`, then `"from":50`, and so on. A short window on one `cusip` usually fits in one page; a filer-name sweep usually does not.
 - Indexing is fast: a filing accepted at 21:24 ET was queryable the same evening.
 
 ### Form S-1/424B4 (`POST /form-s1-424b4`)

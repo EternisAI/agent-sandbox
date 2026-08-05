@@ -39,7 +39,7 @@ All endpoints are `GET` only. Every path below is relative to the proxy base (e.
 | Live flow / whale trades / option flow | `/api/option-trades/flow-alerts` |
 | Options screener / flow filter | `/api/screener/option-contracts` |
 | Market sentiment / market tide | `/api/market/market-tide` |
-| Intraday flow pressure on one ETF | `/api/market/{ticker}/etf-tide` |
+| Intraday pressure from options flow on one ETF | `/api/market/{ticker}/etf-tide` |
 | Dark pool | `/api/darkpool/recent` or `/api/darkpool/{ticker}` |
 | Short interest / days to cover / failures to deliver | `/api/shorts/{ticker}/interest-float/v2`, `/api/shorts/{ticker}/ftds` |
 | Contract greeks (SPY/QQQ/IWM only) | `/api/stock/{ticker}/greeks` |
@@ -135,7 +135,7 @@ A dark pool print is a trade executed off-exchange (through an ATS or an interna
 
 - **Market Tide:** `api/market/market-tide` — full session, one row per interval (81 rows for a regular session).
 - **Sector Tide:** `api/market/{sector}/sector-tide`
-- **ETF Tide:** `api/market/{ticker}/etf-tide` — intraday options flow pressure on one ETF. Fields per row: `timestamp`, `date`, `net_call_premium`, `net_put_premium`, `net_volume`, `underlying_price`, all strings. Direction read off tide is an inference about positioning, not a fund flow — for actual money in and out of an ETF use `api/etfs/{ticker}/in-outflow`.
+- **ETF Tide:** `api/market/{ticker}/etf-tide` — intraday pressure from options flow on one ETF. Fields per row: `timestamp`, `date`, `net_call_premium`, `net_put_premium`, `net_volume`, `underlying_price`, all strings. Direction read off tide is an inference about positioning, not a fund flow — for actual money in and out of an ETF use `api/etfs/{ticker}/in-outflow`.
 - **Correlations:** `api/market/correlations`
   - Required: `tickers=AAPL,MSFT,GOOGL,AMZN` (uppercase, no spaces) and `interval=1y`
   - Lowercase, spaces, or missing `interval` silently return `[]`. Only `interval=1y` reliably populated.
@@ -240,9 +240,10 @@ api_key = os.environ["PROXY_API_KEY"]
 headers = {"Authorization": f"Bearer {api_key}", "UW-CLIENT-API-ID": "100001"}
 
 resp = httpx.get(f"{proxy_base.rstrip('/')}/api/etfs/SPY/in-outflow", headers=headers, timeout=20)
+resp.raise_for_status()  # a 401 or 429 must not read as "no flows"
 rows = resp.json().get("data", [])  # newest first
 
-cutoff = str(date.today() - timedelta(days=7))
+cutoff = str(date.today() - timedelta(days=6))  # today plus the six prior dates
 window = [r for r in rows if r["date"] >= cutoff]
 net = sum(float(r["change_prem"]) for r in window)
 
@@ -323,6 +324,7 @@ resp = httpx.get(f"{proxy_base.rstrip('/')}/api/darkpool/NVDA", headers=headers,
     "min_premium": 1_000_000,
     "limit": 100,
 }, timeout=20)
+resp.raise_for_status()
 data = resp.json().get("data", [])
 
 def inferred_side(p):
