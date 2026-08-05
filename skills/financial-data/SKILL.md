@@ -67,11 +67,11 @@ The SDK has no fund flow or positioning data, and searching `discover.py` for "f
 
 Do not fall back to web search for these. Weekly issuer and ETF.com roundups are the wrong granularity and usually days stale.
 
-## ETF Fund Flows (ETF Global add-on)
+## ETF Fund Flows (whole universe)
 
-Massive sells whole-universe fund flow data as a separate ETF Global add-on. It is a REST-only dataset with no SDK method, so call it with `httpx` through the same proxy base.
+Massive's ETF Global dataset carries daily fund flow for every US ETF. It is REST-only with no SDK method, so call it with `httpx` through the same proxy base.
 
-**This returns HTTP 403 (`NOT_ENTITLED`) until the add-on is on our plan.** On a 403, do not retry and do not fall back to web search — use `unusual-whales` `api/etfs/{ticker}/in-outflow` for per-ticker daily flow, which is on our current plan. The value of this endpoint over that one is breadth: it screens the whole ETF universe in one call, which per-ticker lookups cannot do.
+Use this when the question spans funds — which ETFs took the most money this week, where sector money rotated. For daily flow on one named ETF, `unusual-whales` `api/etfs/{ticker}/in-outflow` is the shorter path and returns the full history in a single call.
 
 ```python
 import os, httpx
@@ -90,8 +90,6 @@ resp = httpx.get(
     },
     timeout=30,
 )
-if resp.status_code == 403:
-    raise SystemExit("ETF Global add-on not on our plan -- use the unusual-whales skill")
 resp.raise_for_status()
 results = resp.json().get("results", [])
 ```
