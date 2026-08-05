@@ -56,6 +56,51 @@ print(f"Market: {status.market}, Server time: {status.server_time}")
 
 **Why this approach:** `get_last_trade`/`get_last_quote` require a higher-tier plan (NOT_AUTHORIZED on basic). `get_snapshot_ticker` returns None/zeroed fields when market is closed. `get_previous_close_agg` + `get_aggs` always work.
 
+## What This Skill Does Not Cover
+
+The SDK has no fund flow or positioning data, and searching `discover.py` for "flow", "etf", or "short interest" returns nothing. That is a gap in this skill, not a gap in what Axion can reach. Use the `unusual-whales` skill instead for:
+
+- **ETF fund flows** (daily creations and redemptions) — `api/etfs/{ticker}/in-outflow`
+- **Dark pool prints** — `api/darkpool/{ticker}`, `api/darkpool/recent`
+- **Intraday flow pressure** — `api/market/{ticker}/etf-tide`, `api/market/market-tide`
+- **Short interest, failures to deliver, gamma exposure, institutional holdings**
+
+Do not fall back to web search for these. Weekly issuer and ETF.com roundups are the wrong granularity and usually days stale.
+
+## ETF Fund Flows (ETF Global add-on)
+
+Massive sells whole-universe fund flow data as a separate ETF Global add-on. It is a REST-only dataset with no SDK method, so call it with `httpx` through the same proxy base.
+
+**This returns HTTP 403 (`NOT_ENTITLED`) until the add-on is on our plan.** On a 403, do not retry and do not fall back to web search — use `unusual-whales` `api/etfs/{ticker}/in-outflow` for per-ticker daily flow, which is on our current plan. The value of this endpoint over that one is breadth: it screens the whole ETF universe in one call, which per-ticker lookups cannot do.
+
+```python
+import os, httpx
+
+proxy_base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/massive-proxy")
+api_key = os.environ["PROXY_API_KEY"]
+
+# The proxy authenticates on the Authorization header and injects the vendor
+# key itself. Never put an apiKey param on the request.
+resp = httpx.get(
+    f"{proxy_base.rstrip('/')}/etf-global/v1/fund-flows",
+    headers={"Authorization": f"Bearer {api_key}"},
+    params={
+        "processed_date.gte": "2026-07-01",
+        "limit": 5000,          # 5000 is the maximum
+    },
+    timeout=30,
+)
+if resp.status_code == 403:
+    raise SystemExit("ETF Global add-on not on our plan -- use the unusual-whales skill")
+resp.raise_for_status()
+results = resp.json().get("results", [])
+```
+
+- Filter by `composite_ticker` for one fund; omit it to sweep the universe.
+- `processed_date` and `effective_date` both accept `.gt`, `.gte`, `.lt`, `.lte` suffixes. `effective_date` is the flow date; `processed_date` is when the vendor published it, which is what you want when checking for new data.
+- History goes back to 2017-04-03.
+- Paginate with `next_url` when the result set exceeds `limit`.
+
 ## Method Index with Field Names
 
 All field values are **floats** unless noted. Timestamps are **int** (Unix epoch milliseconds). Dates are **str** (ISO format "YYYY-MM-DD").

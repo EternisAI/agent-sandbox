@@ -112,6 +112,11 @@ Use for filing content keyword queries across all forms.
 - Use full strings: `SC 13D`, `SC 13G`, `SC 13D/A`, `SC 13G/A`.
 - `cusip` is target company, `cik` is filer.
 - Use `POST /form-13d-13g` for 13D filings; combine with Section Extractor for detailed text extraction.
+- **This is the endpoint for activist and large-stake questions** — who is accumulating a position in a company, how big, and since when. The response is already parsed, so the stake size is a number you can compare across filings without touching the filing text.
+- Per-filing fields: `nameOfIssuer`, `cusip`, `filedAt`, `eventDate` (the date the stake crossed the threshold, which is earlier than `filedAt`), `amendmentNo`, and `item1` through `item7` as text.
+- Per-owner fields under `owners[*]`: `name`, `amountAsPercent` (percent of the class, e.g. `8.4`), `aggregateAmountOwned` (shares), `soleVotingPower`, `sharedVotingPower`, `soleDispositivePower`, `sharedDispositivePower`.
+- Query a date range on `filedAt` to assemble a stake history in one call — filter by `cusip` for one target, or by the filer's name to follow one activist across names. Do not page through filings one at a time.
+- Indexing is fast: a filing accepted at 21:24 ET was queryable the same evening.
 
 ### Form S-1/424B4 (`POST /form-s1-424b4`)
 
