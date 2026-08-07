@@ -243,7 +243,10 @@ resp = httpx.get(f"{proxy_base.rstrip('/')}/api/etfs/SPY/in-outflow", headers=he
 resp.raise_for_status()  # a 401 or 429 must not read as "no flows"
 rows = resp.json().get("data", [])  # newest first
 
-cutoff = str(date.today() - timedelta(days=6))  # today plus the six prior dates
+# Anchor to the newest session in the data, not the host clock. The sandbox runs
+# UTC, which rolls over five hours before New York does and would drop a session.
+latest = date.fromisoformat(rows[0]["date"])
+cutoff = str(latest - timedelta(days=6))  # that session plus the six prior dates
 window = [r for r in rows if r["date"] >= cutoff]
 net = sum(float(r["change_prem"]) for r in window)
 

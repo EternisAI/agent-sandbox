@@ -103,7 +103,15 @@ Each row carries `composite_ticker`, `effective_date`, `fund_flow` (net dollars 
 - Some `composite_ticker` values carry leading or trailing whitespace (`" BRKD"`, `"SKHA\t\t"`). Strip before comparing or grouping, or one fund splits into two.
 - The feed runs a day or two behind. On 2026-08-07 the newest row was `effective_date` 2026-08-05. Read the newest `processed_date` in the response and report that date rather than assuming yesterday.
 - History goes back to 2017-04-03.
-- Paginate with `next_url` when the result set exceeds `limit`.
+- `next_url` comes back as an absolute `api.massive.com` URL. Do not request it as-is: that sends the proxy bearer token to the vendor host, where it does not belong and would not authenticate anyway. Take its `cursor` value and re-issue against `proxy_base`.
+
+```python
+from urllib.parse import urlparse, parse_qs
+
+def next_cursor(payload):
+    nxt = payload.get("next_url")
+    return parse_qs(urlparse(nxt).query).get("cursor", [None])[0] if nxt else None
+```
 
 ## Method Index with Field Names
 
