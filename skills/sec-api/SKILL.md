@@ -112,6 +112,14 @@ Use for filing content keyword queries across all forms.
 - Use full strings: `SC 13D`, `SC 13G`, `SC 13D/A`, `SC 13G/A`.
 - `cusip` is target company, `cik` is filer.
 - Use `POST /form-13d-13g` for 13D filings; combine with Section Extractor for detailed text extraction.
+- **This is the endpoint for activist and large-stake questions** — who is accumulating a position in a company, how big, and since when. The response is already parsed, so the stake size is a number you can compare across filings without touching the filing text.
+- Per-filing fields: `nameOfIssuer`, `cusip`, `filedAt`, `eventDate`, and the numbered items. The items are **objects, not strings** — read the narrative out of their properties rather than treating the item as text. 13D carries `item1` through `item7`; 13G carries `item1` through `item10`, where items 7 to 10 pair a `notApplicable` boolean with the narrative. On 13G, `item4` is an **array** of ownership objects (`amountBeneficiallyOwned`, `classPercent`); on 13D it is a single object holding `transactionPurpose`.
+- Amendments are identified by the `/A` suffix on `formType`. There is no `amendmentNo` field.
+- `eventDate` is the date of the event that required the filing, and falls on or before `filedAt` — same-day filings are normal, so do not assume it is strictly earlier. On an original filing it is the threshold crossing; on an amendment it is the material change that triggered the amendment, usually a change in the stake rather than a crossing.
+- Per-owner fields under `owners[*]`: `name`, `amountAsPercent` (percent of the class, e.g. `8.4`), `aggregateAmountOwned` (shares), `soleVotingPower`, `sharedVotingPower`, `soleDispositivePower`, `sharedDispositivePower`.
+- Query a date range on `filedAt` to assemble a stake history — filter by `cusip` for one target, or by `filers.cik` to follow one activist, falling back to `filers.name` when the CIK is unknown. `filers.name` values carry a `(Filed by)` or `(Subject)` suffix, so match on a substring rather than the whole string. This beats fetching filings one accession at a time.
+- The response caps at 50 filings. When a range matches more, page with `from` offsets and a fixed `sort` so the ordering stays stable across pages: `{"query":"...","from":0,"size":50,"sort":[{"filedAt":{"order":"desc"}}]}`, then `"from":50`, and so on. A short window on one `cusip` usually fits in one page; a filer-name sweep usually does not.
+- Indexing is fast: a filing accepted at 21:24 ET was queryable the same evening.
 
 ### Form S-1/424B4 (`POST /form-s1-424b4`)
 

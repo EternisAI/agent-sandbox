@@ -1,6 +1,6 @@
 ---
 name: unusual-whales
-description: Query unusual options flow, dark pool prints, market tide, stock greek exposure, congressional/insider trading, earnings, and sector ETF data via the Unusual Whales API proxy. Use when users ask for options flow alerts, whale trades, dark pool data, GEX/gamma exposure, or market sentiment.
+description: Query daily ETF fund flows (creations and redemptions), unusual options flow, dark pool prints, market tide, stock greek exposure, short interest, congressional/insider trading, earnings, and sector ETF data via the Unusual Whales API proxy. Use when users ask how much money went into or out of an ETF, for options flow alerts, whale trades, dark pool data, GEX/gamma exposure, short interest, or market sentiment.
 allowed-tools: Bash(python3 -c *), Bash(python3 - *), Bash(python3 *)
 ---
 
@@ -35,10 +35,13 @@ All endpoints are `GET` only. Every path below is relative to the proxy base (e.
 
 | User intent | Endpoint |
 | --- | --- |
+| **ETF fund flows / money into or out of an ETF / creations and redemptions** | `/api/etfs/{ticker}/in-outflow` |
 | Live flow / whale trades / option flow | `/api/option-trades/flow-alerts` |
 | Options screener / flow filter | `/api/screener/option-contracts` |
 | Market sentiment / market tide | `/api/market/market-tide` |
+| Intraday pressure from options flow on one ETF | `/api/market/{ticker}/etf-tide` |
 | Dark pool | `/api/darkpool/recent` or `/api/darkpool/{ticker}` |
+| Short interest / days to cover / failures to deliver | `/api/shorts/{ticker}/interest-float/v2`, `/api/shorts/{ticker}/ftds` |
 | Contract greeks (SPY/QQQ/IWM only) | `/api/stock/{ticker}/greeks` |
 | Spot gamma / GEX / gamma exposure | `/api/stock/{ticker}/spot-exposures/expiry-strike` |
 | Earnings history | `/api/stock/{ticker}/earnings` |
@@ -118,15 +121,21 @@ For authoritative financials (10-K/10-Q line items, restatements, amendments), u
 
 ### Dark Pool
 
-- **Recent (market-wide):** `api/darkpool/recent`
+A dark pool print is a trade executed off-exchange (through an ATS or an internalizer) and reported to a FINRA trade reporting facility after the fact. It shows size and price but never a buyer or seller, and never a side.
+
+- **Recent (market-wide):** `api/darkpool/recent` — use this to scan for large blocks without naming a ticker first.
 - **Ticker-specific:** `api/darkpool/{ticker}`
 - `newer_than` / `older_than` params use UTC timestamp format (not `YYYY-MM-DD`).
+- `min_premium` filters by dollar notional. Always set it — unfiltered, the response is mostly odd-lot retail routing. `min_premium=1000000` is a reasonable floor for "block".
+- Fields: `ticker`, `size`, `price`, `premium`, `volume` (the ticker's cumulative volume, not the print's), `executed_at`, `trf_executed_at`, `market_center`, `canceled`, `ext_hour_sold_codes`, `sale_cond_codes`, `trade_settlement`, `tracking_id`.
+- **Side inference.** Every print carries the NBBO at execution: `nbbo_bid`, `nbbo_ask`, `nbbo_bid_quantity`, `nbbo_ask_quantity`. A print at or above the ask reads as buyer-initiated, at or below the bid as seller-initiated, and inside the spread as unclassifiable. Compute this in Python from the fields above. **It is an inference, not a reported side** — say so when you report it, and do not present a day's net inferred flow as an observed number.
+- `executed_at` is when the trade happened; `trf_executed_at` is when it was reported. Late-reported prints can be minutes or hours old, so sort by `executed_at` when building a timeline.
 
 ### Market-Wide
 
-- **Market Tide:** `api/market/market-tide`
+- **Market Tide:** `api/market/market-tide` — full session, one row per interval (81 rows for a regular session).
 - **Sector Tide:** `api/market/{sector}/sector-tide`
-- **ETF Tide:** `api/market/{ticker}/etf-tide`
+- **ETF Tide:** `api/market/{ticker}/etf-tide` — intraday pressure from options flow on one ETF. Fields per row: `timestamp`, `date`, `net_call_premium`, `net_put_premium`, `net_volume`, `underlying_price`, all strings. Direction read off tide is an inference about positioning, not a fund flow — for actual money in and out of an ETF use `api/etfs/{ticker}/in-outflow`.
 - **Correlations:** `api/market/correlations`
   - Required: `tickers=AAPL,MSFT,GOOGL,AMZN` (uppercase, no spaces) and `interval=1y`
   - Lowercase, spaces, or missing `interval` silently return `[]`. Only `interval=1y` reliably populated.
@@ -167,7 +176,11 @@ For raw 13F holdings (as-filed from SEC), use the `sec-api` skill.
 - **Holdings:** `api/etfs/{ticker}/holdings`
 - **Info:** `api/etfs/{ticker}/info`
 - **Weights:** `api/etfs/{ticker}/weights` — response is a flat dict without a `data` wrapper
-- **In/Outflow:** `api/etfs/{ticker}/in-outflow`
+- **Fund flows (in/outflow):** `api/etfs/{ticker}/in-outflow` — **daily** creations and redemptions for one ETF. This is the answer to "how much money went into SPY last week" and every variant of it. Do not answer that question from web search: issuer pages and ETF.com publish weekly roundups, which are the wrong granularity and usually days stale.
+  - One call returns the full history, newest row first — 680 daily rows back to 2023-08-07 for QQQ as of 2026-08-04. No date params needed; slice the list in Python.
+  - Fields: `date`, `change_prem` (net dollar flow, a **string** — cast before arithmetic), `change` (net shares, integer), `close` (string), `volume`, `expiration_cycle`, `is_fomc`.
+  - Negative `change_prem` is an outflow. Example: SPY on 2026-08-04 was `-6128000000`, a $6.13B outflow.
+  - Sum `change_prem` over a date slice for a weekly or monthly figure rather than reporting a single day as a trend.
 
 ### Short Selling
 
@@ -215,6 +228,32 @@ For raw 13F holdings (as-filed from SEC), use the `sec-api` skill.
 - **Option Contract Volume Profile:** `api/option-contract/{id}/volume-profile`
 
 ## Examples
+
+### ETF Fund Flows (Daily, Summed Over a Window)
+
+```python
+import os, httpx
+from datetime import date, timedelta
+
+proxy_base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/unusual-whale-proxy")
+api_key = os.environ["PROXY_API_KEY"]
+headers = {"Authorization": f"Bearer {api_key}", "UW-CLIENT-API-ID": "100001"}
+
+resp = httpx.get(f"{proxy_base.rstrip('/')}/api/etfs/SPY/in-outflow", headers=headers, timeout=20)
+resp.raise_for_status()  # a 401 or 429 must not read as "no flows"
+rows = resp.json().get("data", [])  # newest first
+
+# Anchor to the newest session in the data, not the host clock. The sandbox runs
+# UTC, which rolls over five hours before New York does and would drop a session.
+latest = date.fromisoformat(rows[0]["date"])
+cutoff = str(latest - timedelta(days=6))  # that session plus the six prior dates
+window = [r for r in rows if r["date"] >= cutoff]
+net = sum(float(r["change_prem"]) for r in window)
+
+print(f"SPY net flow, last 7 days: ${net/1e9:+.2f}B over {len(window)} sessions")
+for r in window:
+    print(f"  {r['date']}  {float(r['change_prem'])/1e6:+10.1f}M  close={r['close']}")
+```
 
 ### Flow Alerts (Unusual Activity)
 
@@ -284,10 +323,26 @@ proxy_base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/unusua
 api_key = os.environ["PROXY_API_KEY"]
 headers = {"Authorization": f"Bearer {api_key}", "UW-CLIENT-API-ID": "100001"}
 
-resp = httpx.get(f"{proxy_base.rstrip('/')}/api/darkpool/NVDA", headers=headers, timeout=20)
+resp = httpx.get(f"{proxy_base.rstrip('/')}/api/darkpool/NVDA", headers=headers, params={
+    "min_premium": 1_000_000,
+    "limit": 100,
+}, timeout=20)
+resp.raise_for_status()
 data = resp.json().get("data", [])
-for d in data[:5]:
-    print(f"{d.get('ticker')} price={d.get('price')} size={d.get('size')} at={d.get('executed_at')}")
+
+def inferred_side(p):
+    """Buyer- or seller-initiated, inferred from where the print sat in the NBBO.
+    Not a reported side. Report it as an inference."""
+    price, bid, ask = float(p["price"]), float(p["nbbo_bid"]), float(p["nbbo_ask"])
+    if price >= ask:
+        return "buy"
+    if price <= bid:
+        return "sell"
+    return "unclassified"
+
+for d in data[:10]:
+    print(f"{d['ticker']} ${float(d['premium'])/1e6:.1f}M size={d['size']} "
+          f"price={d['price']} side~{inferred_side(d)} at={d['executed_at']}")
 ```
 
 ### Stock IV Screener (High IV Rank by Market Cap)

@@ -56,6 +56,63 @@ print(f"Market: {status.market}, Server time: {status.server_time}")
 
 **Why this approach:** `get_last_trade`/`get_last_quote` require a higher-tier plan (NOT_AUTHORIZED on basic). `get_snapshot_ticker` returns None/zeroed fields when market is closed. `get_previous_close_agg` + `get_aggs` always work.
 
+## What This Skill Does Not Cover
+
+The SDK has no fund flow or positioning data, and searching `discover.py` for "flow", "etf", or "short interest" returns nothing. That is a gap in this skill, not a gap in what Axion can reach. Use the `unusual-whales` skill instead for:
+
+- **ETF fund flows** (daily creations and redemptions) — `api/etfs/{ticker}/in-outflow`
+- **Dark pool prints** — `api/darkpool/{ticker}`, `api/darkpool/recent`
+- **Intraday pressure from options flow** — `api/market/{ticker}/etf-tide`, `api/market/market-tide`
+- **Short interest, failures to deliver, gamma exposure, institutional holdings**
+
+Do not fall back to web search for these. Weekly issuer and ETF.com roundups are the wrong granularity and usually days stale.
+
+## ETF Fund Flows (whole universe)
+
+Massive's ETF Global dataset carries daily fund flow for every US ETF. It is REST-only with no SDK method, so call it with `httpx` through the same proxy base.
+
+Use this when the question spans funds — which ETFs took the most money this week, where sector money rotated. For daily flow on one named ETF, `unusual-whales` `api/etfs/{ticker}/in-outflow` is the shorter path, returns the full history in a single call, and lands sooner: this feed runs a day or two behind, so on a "what happened yesterday" question it may not have yesterday.
+
+```python
+import os, httpx
+
+proxy_base = os.environ["PROXY_BASE_URL"].replace("/api/llm-proxy", "/api/massive-proxy")
+api_key = os.environ["PROXY_API_KEY"]
+
+# The proxy authenticates on the Authorization header and injects the vendor
+# key itself. Never put an apiKey param on the request.
+resp = httpx.get(
+    f"{proxy_base.rstrip('/')}/etf-global/v1/fund-flows",
+    headers={"Authorization": f"Bearer {api_key}"},
+    params={
+        "processed_date.gte": "2026-07-01",
+        "limit": 5000,          # 5000 is the maximum
+    },
+    timeout=30,
+)
+resp.raise_for_status()
+results = resp.json().get("results", [])
+```
+
+Each row carries `composite_ticker`, `effective_date`, `fund_flow` (net dollars for the day, negative is an outflow), `nav`, `shares_outstanding`, and `processed_date`.
+
+- Filter by `composite_ticker` for one fund; omit it to sweep the universe. It also takes `.any_of` for a basket.
+- `processed_date` and `effective_date` both accept `.gt`, `.gte`, `.lt`, `.lte` suffixes. `effective_date` is the flow date; `processed_date` is when the vendor published it, which is what you want when checking for new data. Issuers publish on different delays, so a fund can be missing from a given `effective_date` and arrive later.
+- `limit` defaults to 100, so set it or you will silently rank the wrong ETFs on a universe sweep. 5000 is the maximum, and a larger value is clamped rather than rejected. The universe is bigger than one page, so follow `next_url` before claiming a top-N.
+- `sort` accepts only `composite_ticker` and `processed_date`, each with `.asc` or `.desc`. Sorting on `effective_date` is an error. To order by flow date, sort on `processed_date` and re-sort the rows yourself.
+- Some `composite_ticker` values carry leading or trailing whitespace (`" BRKD"`, `"SKHA\t\t"`). Strip before comparing or grouping, or one fund splits into two.
+- The feed runs a day or two behind. On 2026-08-07 the newest row was `effective_date` 2026-08-05. Read the newest `processed_date` in the response and report that date rather than assuming yesterday.
+- History goes back to 2017-04-03.
+- `next_url` comes back as an absolute `api.massive.com` URL. Do not request it as-is: that sends the proxy bearer token to the vendor host, where it does not belong and would not authenticate anyway. Take its `cursor` value and re-issue against `proxy_base`.
+
+```python
+from urllib.parse import urlparse, parse_qs
+
+def next_cursor(payload):
+    nxt = payload.get("next_url")
+    return parse_qs(urlparse(nxt).query).get("cursor", [None])[0] if nxt else None
+```
+
 ## Method Index with Field Names
 
 All field values are **floats** unless noted. Timestamps are **int** (Unix epoch milliseconds). Dates are **str** (ISO format "YYYY-MM-DD").
