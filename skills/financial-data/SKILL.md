@@ -71,7 +71,7 @@ Do not fall back to web search for these. Weekly issuer and ETF.com roundups are
 
 Massive's ETF Global dataset carries daily fund flow for every US ETF. It is REST-only with no SDK method, so call it with `httpx` through the same proxy base.
 
-Use this when the question spans funds — which ETFs took the most money this week, where sector money rotated. For daily flow on one named ETF, `unusual-whales` `api/etfs/{ticker}/in-outflow` is the shorter path and returns the full history in a single call.
+Use this when the question spans funds — which ETFs took the most money this week, where sector money rotated. For daily flow on one named ETF, `unusual-whales` `api/etfs/{ticker}/in-outflow` is the shorter path, returns the full history in a single call, and lands sooner: this feed runs a day or two behind, so on a "what happened yesterday" question it may not have yesterday.
 
 ```python
 import os, httpx
@@ -98,9 +98,11 @@ Each row carries `composite_ticker`, `effective_date`, `fund_flow` (net dollars 
 
 - Filter by `composite_ticker` for one fund; omit it to sweep the universe. It also takes `.any_of` for a basket.
 - `processed_date` and `effective_date` both accept `.gt`, `.gte`, `.lt`, `.lte` suffixes. `effective_date` is the flow date; `processed_date` is when the vendor published it, which is what you want when checking for new data. Issuers publish on different delays, so a fund can be missing from a given `effective_date` and arrive later.
-- `limit` defaults to 100, so set it or you will silently rank the wrong ETFs on a universe sweep. 5000 is the maximum.
-- `sort` takes comma-separated columns with `.asc` or `.desc`.
-- History goes back to 2017-04-03, updated daily.
+- `limit` defaults to 100, so set it or you will silently rank the wrong ETFs on a universe sweep. 5000 is the maximum, and a larger value is clamped rather than rejected. The universe is bigger than one page, so follow `next_url` before claiming a top-N.
+- `sort` accepts only `composite_ticker` and `processed_date`, each with `.asc` or `.desc`. Sorting on `effective_date` is an error. To order by flow date, sort on `processed_date` and re-sort the rows yourself.
+- Some `composite_ticker` values carry leading or trailing whitespace (`" BRKD"`, `"SKHA\t\t"`). Strip before comparing or grouping, or one fund splits into two.
+- The feed runs a day or two behind. On 2026-08-07 the newest row was `effective_date` 2026-08-05. Read the newest `processed_date` in the response and report that date rather than assuming yesterday.
+- History goes back to 2017-04-03.
 - Paginate with `next_url` when the result set exceeds `limit`.
 
 ## Method Index with Field Names
